@@ -14,7 +14,7 @@ from micropython import const
 
 # NTP retry / timeout
 _NTP_RETRIES = const(3)
-_NTP_TIMEOUT = const(10)  # seconds to wait for connect
+_NTP_TIMEOUT = const(20)  # seconds to wait for connect
 _CONNECT_POLL = const(250)  # ms between connection polls
 
 # LA (PDT) is UTC-7. Adjust here if needed; the RTC stores local time.
