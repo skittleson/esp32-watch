@@ -19,7 +19,6 @@
 
 import time
 import ujson
-import _thread
 
 import lvgl as lv
 import task_handler  # lvgl_micropython task handler
@@ -34,6 +33,9 @@ from config import (
     SCREEN_ALARM,
     SETTINGS_FILE,
 )
+
+# Set True to enable BLE background thread (set False to debug stack overflow)
+BLE_ENABLED = False
 
 # ── Settings helpers ──────────────────────────────────────────────────────────
 
@@ -112,7 +114,6 @@ def main():
 
     imu_i2c = I2CAdapter(touch.get_i2c_bus(), 0x6B)
     imu = QMI8658(imu_i2c)
-    imu = QMI8658(i2c)
     imu.set_steps(shared["steps"])
     bat = Battery()
     shared["bat_pct"] = bat.read_percent()
@@ -138,12 +139,13 @@ def main():
     # duration=10ms is comfortable for this display; set lower if animations stutter
     th = task_handler.TaskHandler(duration=10)
 
-    # ── BLE (starts _thread internally) ───────────────────────────────────
-    from ble.service import ble_watch
+    # ── BLE (optional — starts _thread internally) ─────────────────────────
+    if BLE_ENABLED:
+        from ble.service import ble_watch
 
-    ble_watch.start(shared, display, alarm, mgr, settings)
-    if shared["ble_always"]:
-        ble_watch.activate()
+        ble_watch.start(shared, display, alarm, mgr, settings)
+        if shared["ble_always"]:
+            ble_watch.activate()
 
     print("[WATCH] Running")
 
@@ -181,7 +183,7 @@ def main():
             if was_off:
                 display.on()
 
-            if t["gesture"] == "double_click":
+            if t["gesture"] == "double_click" and BLE_ENABLED:
                 shared["ble_active"] = True
                 ble_watch.activate()
                 print("[TOUCH] BLE activated")
@@ -200,7 +202,7 @@ def main():
                 display.on()
 
         # ── BLE double-click activation from shared ────────────────────────
-        if shared.get("ble_active") and not ble_watch.is_active():
+        if BLE_ENABLED and shared.get("ble_active") and not ble_watch.is_active():
             ble_watch.activate()
             shared["ble_active"] = True
 

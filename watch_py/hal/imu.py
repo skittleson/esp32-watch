@@ -2,7 +2,8 @@
 # No asyncio — polled directly from main loop at ~50Hz.
 # Wake-on-Motion uses INT1 IRQ to set shared['wom_wake'] = True.
 
-from machine import I2C, Pin
+from machine import Pin
+from micropython import const
 import math
 import time
 from config import STEP_MAG_THRESHOLD, STEP_LOCKOUT_MS, PIN_IMU_INT1

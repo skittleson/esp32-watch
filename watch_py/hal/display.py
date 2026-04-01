@@ -10,6 +10,7 @@ import lvgl as lv
 import lcd_bus
 import gc9a01 as _gc9a01_drv  # LVGL driver, not gc9a01_mpy
 from machine import Pin, PWM
+from micropython import const
 from config import (
     PIN_LCD_CLK,
     PIN_LCD_MOSI,

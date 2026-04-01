@@ -1,7 +1,6 @@
-# hal/battery.py — Battery voltage/percentage via ADC + asyncio task
+# hal/battery.py — Battery voltage/percentage via ADC
 
 from machine import ADC, Pin
-import asyncio
 from config import BAT_VOLTAGE_MIN, BAT_VOLTAGE_MAX, BAT_ADC_SAMPLES, PIN_BAT_ADC
 
 
@@ -32,13 +31,3 @@ class Battery:
 
     def cached_percent(self):
         return self._pct
-
-
-# ── Asyncio task ─────────────────────────────────────────────────────────────
-
-
-async def battery_task(bat, shared):
-    """Read battery every 30 s and update shared dict."""
-    while True:
-        shared["bat_pct"] = bat.read_percent()
-        await asyncio.sleep_ms(30_000)

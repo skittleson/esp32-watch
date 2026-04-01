@@ -12,6 +12,7 @@ import cst816s
 import i2c
 import pointer_framework  # noqa — needed by cst816s frozen driver
 from machine import Pin
+from micropython import const
 import time
 
 from config import PIN_TP_SDA, PIN_TP_SCL, PIN_TP_RST, PIN_TP_INT
