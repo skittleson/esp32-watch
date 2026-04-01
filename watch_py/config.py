@@ -46,7 +46,7 @@ STEP_LOCKOUT_MS = 300
 # ─── BLE ─────────────────────────────────────────────────────────────────────
 BLE_DEVICE_NAME = "ESP32Watch"
 BLE_TIMEOUT_MS = 60_000
-BLE_ALWAYS_ON_DEFAULT = False
+BLE_ALWAYS_ON_DEFAULT = True  # always-on by default; user can disable via BLE mode chr
 
 # Standard BLE UUIDs
 UUID_CURRENT_TIME_SVC = bluetooth.UUID(0x1805)

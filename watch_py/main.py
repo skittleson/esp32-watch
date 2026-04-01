@@ -29,6 +29,7 @@ from config import (
     SCREEN_STOPWATCH,
     SCREEN_ALARM,
     SETTINGS_FILE,
+    BLE_ALWAYS_ON_DEFAULT,
 )
 
 # ── Settings helpers ──────────────────────────────────────────────────────────
@@ -65,7 +66,7 @@ def main():
         "acc": [0.0, 0.0, 0.0],
         "gyro": [0.0, 0.0, 0.0],
         "ble_active": False,
-        "ble_always": settings.get("ble_always", False),
+        "ble_always": settings.get("ble_always", BLE_ALWAYS_ON_DEFAULT),
     }
 
     # ── Display + LVGL init ───────────────────────────────────────────────────
