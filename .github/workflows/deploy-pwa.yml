@@ -2,7 +2,7 @@ name: Deploy PWA to GitHub Pages
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - 'pwa/**'
   workflow_dispatch:
