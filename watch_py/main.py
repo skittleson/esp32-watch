@@ -224,16 +224,20 @@ def main():
         t = touch.poll()
         if t:
             last_activity = now
+            was_dimmed = dimmed
             dimmed = False
             sedentary.reset()  # any touch = user is active
             was_off = display.is_off()
-            if was_off:
+            if was_off or was_dimmed:
                 display.on()
 
-            if t["gesture"] == "double_click":
+            if was_off or was_dimmed:
+                # First touch after dim/off: wake screen only, swallow gesture
+                pass
+            elif t["gesture"] == "double_click":
                 ble_watch.activate()
                 print("[TOUCH] BLE re-activated")
-            elif t["gesture"] != "none" and not was_off:
+            elif t["gesture"] != "none":
                 if mgr.notif_visible():
                     # Any tap dismisses the notification overlay
                     if t["gesture"] == "single_click":

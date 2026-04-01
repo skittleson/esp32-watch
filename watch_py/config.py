@@ -98,6 +98,12 @@ C_RED = 0xFF3B30  # Alarm / low battery
 C_YELLOW = 0xFFD600  # Alarm indicator
 C_GREY = 0x555566  # Dividers / hints
 
+# Sci-Fi / Neon accent palette
+C_NEON_CYAN = 0x00FFFF  # Bright cyan — time, dividers
+C_NEON_MAGENTA = 0xFF00FF  # Magenta — step arc / accents
+C_NEON_LIME = 0x39FF14  # Lime — battery arc healthy
+C_NEON_BLUE = 0x4466FF  # Electric blue — tick marks
+
 # ─── Settings file ───────────────────────────────────────────────────────────
 SETTINGS_FILE = "/settings.json"
 FW_VERSION = "2.0.0-lvgl"
