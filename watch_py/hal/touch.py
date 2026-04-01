@@ -57,8 +57,13 @@ class CST816S:
         rst = Pin(rst_pin, Pin.OUT)
         self._driver = cst816s.CST816S(touch_dev, reset_pin=rst)
 
-        # Enable double-click via MotionMask register
+        # MotionMask: enable double-click (0x01)
+        # Single-click, swipes, long-press are reported without mask bits
         self._driver._write_reg(_REG_MOTION_MASK, 0x01)
+
+        # IrqCtl: add EnMotion (0x10) so gesture events fire the INT pin
+        # Frozen driver sets EnTouch|EnChange (0x60); we add EnMotion → 0x70
+        self._driver._write_reg(0xFA, 0x70)
 
         # Attach falling-edge IRQ for gesture name polling
         self._irq_pin = Pin(int_pin, Pin.IN)
@@ -90,12 +95,17 @@ class CST816S:
         except Exception:
             return None
 
-        if rx[1] == 0 and rx[0] == 0x00:
-            return None
+        # rx[0] = gesture ID, rx[1] = finger count
+        # On finger-lift the chip reports gesture with FingerNum=0 — don't filter that out
+        if rx[0] == 0x00 and rx[1] == 0:
+            return None  # truly no event
 
         x = ((rx[2] & 0x0F) << 8) | rx[3]
         y = ((rx[4] & 0x0F) << 8) | rx[5]
         gesture = _GESTURE_MAP.get(rx[0], "none")
+        # Skip bare "none" gestures (finger-down only, no gesture computed yet)
+        if gesture == "none":
+            return None
         return {"gesture": gesture, "x": x, "y": y}
 
     def reattach_irq(self):

@@ -113,6 +113,20 @@ class Stopwatch:
         h1.set_text("swipe up: reset   hold: lap")
         h1.align(lv.ALIGN.BOTTOM_MID, 0, -16)
 
+        # ── Invisible full-screen tap overlay ────────────────────────────
+        # Catches LVGL tap events so start/pause works anywhere on screen
+        self._tap_overlay = lv.obj(scr)
+        self._tap_overlay.set_size(240, 240)
+        self._tap_overlay.set_pos(0, 0)
+        self._tap_overlay.set_style_bg_opa(lv.OPA.TRANSP, 0)
+        self._tap_overlay.set_style_border_width(0, 0)
+        self._tap_overlay.add_flag(lv.obj.FLAG.CLICKABLE)
+        self._tap_overlay.add_event_cb(self._on_tap, lv.EVENT.SHORT_CLICKED, None)
+
+    def _on_tap(self, e):
+        """LVGL tap event — start/pause stopwatch."""
+        self.handle_gesture("single_click")
+
     def handle_gesture(self, gesture):
         if gesture == "single_click":
             if self._state in (_IDLE, _PAUSED):

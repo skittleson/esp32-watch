@@ -338,6 +338,8 @@ class BLEWatch:
         self._settings = settings
         self._register()
         # Start background thread for timeout/notify management
+        # Use 8KB stack to avoid stack overflow with LVGL TaskHandler on main thread
+        _thread.stack_size(8192)
         _thread.start_new_thread(self._thread_fn, ())
 
     def activate(self):

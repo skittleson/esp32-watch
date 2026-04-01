@@ -34,7 +34,7 @@ from config import (
     SETTINGS_FILE,
 )
 
-# Set True to enable BLE background thread (set False to debug stack overflow)
+# Set True to enable BLE background thread
 BLE_ENABLED = False
 
 # ── Settings helpers ──────────────────────────────────────────────────────────
