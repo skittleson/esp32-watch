@@ -87,7 +87,7 @@ class Alarm:
 
         # Alarm time display
         self._time_lbl = lv.label(self._normal)
-        self._time_lbl.set_style_text_font(lv.font_montserrat_48, 0)
+        self._time_lbl.set_style_text_font(lv.font_montserrat_16, 0)
         self._time_lbl.set_style_text_color(_c(C_TEXT_PRI), 0)
         self._time_lbl.set_text("7:30")
         self._time_lbl.align(lv.ALIGN.CENTER, -12, -22)
@@ -128,7 +128,7 @@ class Alarm:
         self._fired_view.add_flag(lv.obj.FLAG.HIDDEN)
 
         self._fire_time_lbl = lv.label(self._fired_view)
-        self._fire_time_lbl.set_style_text_font(lv.font_montserrat_48, 0)
+        self._fire_time_lbl.set_style_text_font(lv.font_montserrat_16, 0)
         self._fire_time_lbl.set_style_text_color(_c(0xFFFFFF), 0)
         self._fire_time_lbl.set_text("7:30")
         self._fire_time_lbl.align(lv.ALIGN.CENTER, 0, -20)
@@ -139,7 +139,7 @@ class Alarm:
         self._fire_ampm_lbl.set_text("AM")
 
         self._dismiss_lbl = lv.label(self._fired_view)
-        self._dismiss_lbl.set_style_text_font(lv.font_montserrat_20, 0)
+        self._dismiss_lbl.set_style_text_font(lv.font_montserrat_16, 0)
         self._dismiss_lbl.set_style_text_color(_c(0xFFFFFF), 0)
         self._dismiss_lbl.set_text("TAP TO DISMISS")
         self._dismiss_lbl.align(lv.ALIGN.CENTER, 0, 50)
@@ -151,7 +151,7 @@ class Alarm:
         self._anim.set_custom_exec_cb(self._pulse_anim_cb)
         self._anim.set_values(0, 100)
         self._anim.set_duration(500)
-        self._anim.set_playback_duration(500)
+        self._anim.set_reverse_duration(500)
         self._anim.set_repeat_count(lv.ANIM_REPEAT_INFINITE)
 
     def _on_switch(self, e):
@@ -185,7 +185,7 @@ class Alarm:
             self._status_lbl.set_text("ALARM ON")
             self._status_lbl.set_style_text_color(_c(C_GREEN), 0)
         else:
-            self._sw.clear_state(lv.STATE.CHECKED)
+            self._sw.remove_state(lv.STATE.CHECKED)
             self._status_lbl.set_text("ALARM OFF")
             self._status_lbl.set_style_text_color(_c(C_TEXT_SEC), 0)
 
@@ -246,20 +246,20 @@ class Alarm:
         self._haptic_pin(1)
         # Show fired view, hide normal view
         self._normal.add_flag(lv.obj.FLAG.HIDDEN)
-        self._fired_view.clear_flag(lv.obj.FLAG.HIDDEN)
-        lv.anim_t.start(self._anim)
+        self._fired_view.remove_flag(lv.obj.FLAG.HIDDEN)
+        self._anim.start()
 
     def dismiss(self):
         self._fired = False
         self._dismissed = True
-        lv.anim_t.del_all()  # stop pulse animation
+        lv.anim_delete_all()  # stop pulse animation
         if self._haptic_pin:
             self._haptic_pin(0)
             self._haptic_pin = None
         # Restore GPIO5 as input for touch IRQ reattachment by caller
         Pin(PIN_TP_INT, Pin.IN)
         self._fired_view.add_flag(lv.obj.FLAG.HIDDEN)
-        self._normal.clear_flag(lv.obj.FLAG.HIDDEN)
+        self._normal.remove_flag(lv.obj.FLAG.HIDDEN)
         self._fired_view.set_style_bg_color(_c(C_RED), 0)  # reset colour
 
     # ── Tick (haptic, called from main loop) ─────────────────────────────────

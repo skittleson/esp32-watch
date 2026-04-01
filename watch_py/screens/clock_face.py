@@ -11,6 +11,7 @@
 
 import lvgl as lv
 import time
+from micropython import const
 from config import (
     C_BG,
     C_SURFACE,
@@ -78,7 +79,7 @@ class ClockFace:
         self._bat_arc.set_style_arc_color(_c(C_ACCENT), lv.PART.INDICATOR)
         self._bat_arc.set_style_arc_width(6, lv.PART.INDICATOR)
         self._bat_arc.remove_style(None, lv.PART.KNOB)
-        self._bat_arc.clear_flag(lv.obj.FLAG.CLICKABLE)
+        self._bat_arc.remove_flag(lv.obj.FLAG.CLICKABLE)
 
         # ── Step arc (inner ring, same geometry, dimmer green) ─────────────
         self._step_arc = lv.arc(scr)
@@ -91,7 +92,7 @@ class ClockFace:
         self._step_arc.set_style_arc_color(_c(C_GREEN), lv.PART.INDICATOR)
         self._step_arc.set_style_arc_width(4, lv.PART.INDICATOR)
         self._step_arc.remove_style(None, lv.PART.KNOB)
-        self._step_arc.clear_flag(lv.obj.FLAG.CLICKABLE)
+        self._step_arc.remove_flag(lv.obj.FLAG.CLICKABLE)
 
         # Make arcs transparent bg so round display bg shows through
         self._bat_arc.set_style_bg_opa(lv.OPA.TRANSP, 0)
@@ -99,7 +100,7 @@ class ClockFace:
 
         # ── Time label ────────────────────────────────────────────────────
         self._time_lbl = lv.label(scr)
-        self._time_lbl.set_style_text_font(lv.font_montserrat_48, 0)
+        self._time_lbl.set_style_text_font(lv.font_montserrat_16, 0)
         self._time_lbl.set_style_text_color(_c(C_TEXT_PRI), 0)
         self._time_lbl.set_text("12:00")
         self._time_lbl.align(lv.ALIGN.CENTER, -12, -18)
@@ -113,7 +114,7 @@ class ClockFace:
 
         # ── Seconds label (small, below time) ────────────────────────────
         self._sec_lbl = lv.label(scr)
-        self._sec_lbl.set_style_text_font(lv.font_montserrat_20, 0)
+        self._sec_lbl.set_style_text_font(lv.font_montserrat_16, 0)
         self._sec_lbl.set_style_text_color(_c(C_ACCENT), 0)
         self._sec_lbl.set_text("00")
         self._sec_lbl.align(lv.ALIGN.CENTER, 0, 28)
@@ -178,7 +179,7 @@ class ClockFace:
         if active != self._ble_active:
             self._ble_active = active
             if active:
-                self._bt_lbl.clear_flag(lv.obj.FLAG.HIDDEN)
+                self._bt_lbl.remove_flag(lv.obj.FLAG.HIDDEN)
             else:
                 self._bt_lbl.add_flag(lv.obj.FLAG.HIDDEN)
 
@@ -186,7 +187,7 @@ class ClockFace:
         if active != self._alarm_on:
             self._alarm_on = active
             if active:
-                self._alm_lbl.clear_flag(lv.obj.FLAG.HIDDEN)
+                self._alm_lbl.remove_flag(lv.obj.FLAG.HIDDEN)
             else:
                 self._alm_lbl.add_flag(lv.obj.FLAG.HIDDEN)
 

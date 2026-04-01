@@ -20,14 +20,11 @@
 import time
 import ujson
 import _thread
-from machine import I2C, Pin
 
 import lvgl as lv
 import task_handler  # lvgl_micropython task handler
 
 from config import (
-    PIN_TP_SDA,
-    PIN_TP_SCL,
     PIN_TP_RST,
     PIN_TP_INT,
     DISPLAY_DIM_MS,
@@ -85,16 +82,36 @@ def main():
     if saved_br is not None:
         display.set_brightness_from_ble(saved_br)
 
-    # ── Touch init (LVGL indev registered inside CST816S.__init__) ─────────
+    # ── Touch init — creates LVGL i2c bus (sole master on SDA=6, SCL=7) ───────
     from hal.touch import CST816S
 
     touch = CST816S(rst_pin=PIN_TP_RST, int_pin=PIN_TP_INT)
 
-    # ── IMU + Battery ──────────────────────────────────────────────────────
+    # ── IMU + Battery — IMU shares the i2c bus via thin adapter ───────────────
     from hal.imu import QMI8658
     from hal.battery import Battery
 
-    i2c = I2C(0, sda=Pin(PIN_TP_SDA), scl=Pin(PIN_TP_SCL), freq=400_000)
+    # Wrap LVGL i2c bus so IMU can call readfrom_mem / writeto_mem
+    class I2CAdapter:
+        """Adapts i2c.I2C.Bus to machine.I2C-like readfrom_mem/writeto_mem API."""
+
+        def __init__(self, lvgl_bus, addr):
+            import i2c as _i2c
+
+            self._dev = _i2c.I2C.Device(bus=lvgl_bus, dev_id=addr, reg_bits=8)
+
+        def readfrom_mem(self, addr, reg, n):
+            tx = bytearray([reg])
+            rx = bytearray(n)
+            self._dev.write_readinto(tx, rx)
+            return bytes(rx)
+
+        def writeto_mem(self, addr, reg, data):
+            buf = bytearray([reg]) + bytearray(data)
+            self._dev.write(buf)
+
+    imu_i2c = I2CAdapter(touch.get_i2c_bus(), 0x6B)
+    imu = QMI8658(imu_i2c)
     imu = QMI8658(i2c)
     imu.set_steps(shared["steps"])
     bat = Battery()
@@ -189,12 +206,9 @@ def main():
 
         # ── Screen update (widget data) ────────────────────────────────────
         # mgr.tick() calls active_screen.update(shared) which updates LVGL
-        # widget properties. TaskHandler.tick() then flushes the render buffer.
+        # widget properties. TaskHandler drives rendering automatically.
         if not display.is_off():
             mgr.tick(shared)
-
-        # TaskHandler drives the LVGL timer/render loop
-        th.tick()
 
         # ── Alarm check ────────────────────────────────────────────────────
         if alarm.should_fire():
@@ -230,6 +244,9 @@ def main():
             settings["ble_always"] = shared.get("ble_always", False)
             save_settings(settings)
             last_persist_tick = now
+
+        # Yield to TaskHandler LVGL timer
+        time.sleep_ms(5)
 
 
 main()

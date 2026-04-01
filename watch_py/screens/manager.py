@@ -7,6 +7,7 @@
 
 import lvgl as lv
 import time
+from micropython import const
 from config import SCREEN_CLOCK, SCREEN_STOPWATCH, SCREEN_ALARM
 
 _SWIPE_DEBOUNCE_MS = 600  # ignore nav swipes within this window
@@ -36,17 +37,17 @@ class ScreenManager:
             if gesture == "swipe_left":
                 self._goto(
                     (self._active + 1) % 3,
-                    lv.SCR_LOAD_ANIM.MOVE_LEFT,
+                    lv.SCREEN_LOAD_ANIM.MOVE_LEFT,
                 )
             else:
                 self._goto(
                     (self._active - 1) % 3,
-                    lv.SCR_LOAD_ANIM.MOVE_RIGHT,
+                    lv.SCREEN_LOAD_ANIM.MOVE_RIGHT,
                 )
         else:
             self._screens[self._active].handle_gesture(gesture)
 
-    def _goto(self, idx, anim=lv.SCR_LOAD_ANIM.NONE):
+    def _goto(self, idx, anim=lv.SCREEN_LOAD_ANIM.NONE):
         if idx == self._active:
             return
         self._active = idx
@@ -60,7 +61,7 @@ class ScreenManager:
 
     def goto(self, idx):
         """External navigation (e.g. alarm fire) — no animation."""
-        self._goto(idx, lv.SCR_LOAD_ANIM.FADE_IN)
+        self._goto(idx, lv.SCREEN_LOAD_ANIM.FADE_IN)
 
     # ── Tick ─────────────────────────────────────────────────────────────────
 

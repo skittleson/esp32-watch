@@ -10,6 +10,7 @@
 
 import lvgl as lv
 import time
+from micropython import const
 from config import (
     C_BG,
     C_BORDER,
@@ -68,7 +69,7 @@ class Stopwatch:
         self._arc.set_style_arc_color(_c(C_ACCENT), lv.PART.INDICATOR)
         self._arc.set_style_arc_width(5, lv.PART.INDICATOR)
         self._arc.remove_style(None, lv.PART.KNOB)
-        self._arc.clear_flag(lv.obj.FLAG.CLICKABLE)
+        self._arc.remove_flag(lv.obj.FLAG.CLICKABLE)
         self._arc.set_style_bg_opa(lv.OPA.TRANSP, 0)
 
         # ── Lap tick mark (small arc segment) — hidden until set ─────────
@@ -80,13 +81,13 @@ class Stopwatch:
         self._lap_arc.set_style_arc_color(_c(C_ORANGE), lv.PART.INDICATOR)
         self._lap_arc.set_style_arc_width(5, lv.PART.INDICATOR)
         self._lap_arc.remove_style(None, lv.PART.KNOB)
-        self._lap_arc.clear_flag(lv.obj.FLAG.CLICKABLE)
+        self._lap_arc.remove_flag(lv.obj.FLAG.CLICKABLE)
         self._lap_arc.set_style_bg_opa(lv.OPA.TRANSP, 0)
         self._lap_arc.add_flag(lv.obj.FLAG.HIDDEN)
 
         # ── Time label ───────────────────────────────────────────────────
         self._time_lbl = lv.label(scr)
-        self._time_lbl.set_style_text_font(lv.font_montserrat_40, 0)
+        self._time_lbl.set_style_text_font(lv.font_montserrat_16, 0)
         self._time_lbl.set_style_text_color(_c(C_TEXT_PRI), 0)
         self._time_lbl.set_text("00:00.00")
         self._time_lbl.align(lv.ALIGN.CENTER, 0, -8)
@@ -138,7 +139,7 @@ class Stopwatch:
             # Show lap tick on arc
             lap_deg = int((self._lap_ms % 60_000) * 360 // 60_000)
             self._lap_arc.set_angles(lap_deg, (lap_deg + 4) % 360)
-            self._lap_arc.clear_flag(lv.obj.FLAG.HIDDEN)
+            self._lap_arc.remove_flag(lv.obj.FLAG.HIDDEN)
 
     def _refresh_status(self):
         if self._state == _IDLE:
