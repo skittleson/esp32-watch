@@ -259,6 +259,14 @@ def main():
             if display.is_off():
                 display.on()
 
+        # ── BLE notification wake ─────────────────────────────────────────────
+        if shared.get("ble_notif_wake"):
+            shared["ble_notif_wake"] = False
+            last_activity = now
+            dimmed = False
+            if display.is_off():
+                display.on()
+
         # ── Screen update ─────────────────────────────────────────────────────
         if not display.is_off():
             mgr.tick(shared)

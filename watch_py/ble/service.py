@@ -314,6 +314,8 @@ class BLEWatch:
         elif h == handles[_H_NOTIFICATION]:
             message = val.decode("utf-8", "ignore").strip("\x00")
             if message and self._mgr:
+                if self._shared is not None:
+                    self._shared["ble_notif_wake"] = True
                 self._mgr.show_notification(message)
                 print("[BLE] Notification:", message)
             elif self._mgr:
