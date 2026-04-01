@@ -31,6 +31,7 @@ from config import (
     SETTINGS_FILE,
     BLE_ALWAYS_ON_DEFAULT,
     NTP_SYNC_INTERVAL_MS,
+    DEFAULT_STEP_GOAL,
 )
 
 # ── Settings helpers ──────────────────────────────────────────────────────────
@@ -62,6 +63,7 @@ def main():
 
     shared = {
         "steps": settings.get("steps", 0),
+        "step_goal": settings.get("step_goal", DEFAULT_STEP_GOAL),
         "bat_pct": 100,
         "temp": 0.0,
         "acc": [0.0, 0.0, 0.0],
@@ -231,12 +233,12 @@ def main():
             if was_off or was_dimmed:
                 display.on()
 
-            if was_off or was_dimmed:
-                # First touch after dim/off: wake screen only, swallow gesture
-                pass
-            elif t["gesture"] == "double_click":
+            if t["gesture"] == "double_click":
                 ble_watch.activate()
                 print("[TOUCH] BLE re-activated")
+            elif was_off or was_dimmed:
+                # First touch after dim/off: wake screen only, swallow gesture
+                pass
             elif t["gesture"] != "none":
                 if mgr.notif_visible():
                     # Any tap dismisses the notification overlay
@@ -292,6 +294,7 @@ def main():
         # ── Persist settings every 60s ────────────────────────────────────────
         if time.ticks_diff(now, last_persist_tick) >= 60_000:
             settings["steps"] = shared["steps"]
+            settings["step_goal"] = shared.get("step_goal", DEFAULT_STEP_GOAL)
             settings["ble_always"] = shared.get("ble_always", False)
             # wifi_ssid and wifi_pass are written directly into settings dict
             # by ble/service.py write handler — just save whatever is there

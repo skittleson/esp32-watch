@@ -2,7 +2,7 @@
 #
 # Normal view:
 #   - Title "ALARM"
-#   - Large time display (12h format, Montserrat 48)
+#   - Large time display (12h format, Montserrat 28)
 #   - Toggle switch (ON/OFF)
 #   - Status label
 #   - Hint label
@@ -32,6 +32,7 @@ from config import (
     C_GREY,
     PIN_HAPTIC,
     PIN_TP_INT,
+    get_font_big,
 )
 
 
@@ -87,7 +88,7 @@ class Alarm:
 
         # Alarm time display
         self._time_lbl = lv.label(self._normal)
-        self._time_lbl.set_style_text_font(lv.font_montserrat_16, 0)
+        self._time_lbl.set_style_text_font(get_font_big(), 0)
         self._time_lbl.set_style_text_color(_c(C_TEXT_PRI), 0)
         self._time_lbl.set_text("7:30")
         self._time_lbl.align(lv.ALIGN.CENTER, -12, -22)
@@ -128,7 +129,7 @@ class Alarm:
         self._fired_view.add_flag(lv.obj.FLAG.HIDDEN)
 
         self._fire_time_lbl = lv.label(self._fired_view)
-        self._fire_time_lbl.set_style_text_font(lv.font_montserrat_16, 0)
+        self._fire_time_lbl.set_style_text_font(get_font_big(), 0)
         self._fire_time_lbl.set_style_text_color(_c(0xFFFFFF), 0)
         self._fire_time_lbl.set_text("7:30")
         self._fire_time_lbl.align(lv.ALIGN.CENTER, 0, -20)

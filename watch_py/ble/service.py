@@ -36,7 +36,9 @@ from config import (
     UUID_WIFI_SYNC_CHR,
     UUID_SEDENTARY_CHR,
     UUID_NOTIFICATION_CHR,
+    UUID_STEP_GOAL_CHR,
     FW_VERSION,
+    DEFAULT_STEP_GOAL,
 )
 
 # ── IRQ event constants ────────────────────────────────────────────────────────
@@ -96,6 +98,7 @@ _SERVICES = (
                 _FLAG_READ | _FLAG_NOTIFY,
             ),  # uint32 epoch of last alert
             (UUID_NOTIFICATION_CHR, _FLAG_WRITE),  # UTF-8 message → watch toast
+            (UUID_STEP_GOAL_CHR, _FLAG_READ | _FLAG_WRITE),  # uint16 daily step goal
         ),
     ),
 )
@@ -116,6 +119,7 @@ _H_WIFI_PASS = const(11)
 _H_WIFI_SYNC = const(12)
 _H_SEDENTARY = const(13)  # uint32 epoch timestamp of last sedentary alert
 _H_NOTIFICATION = const(14)  # write-only UTF-8 message → watch toast
+_H_STEP_GOAL = const(15)  # uint16 daily step goal (default 7000)
 
 
 class BLEWatch:
@@ -145,7 +149,19 @@ class BLEWatch:
             (h_bat,),
             (h_fw,),
             (h_ess_temp,),
-            (h_at, h_ae, h_br, h_st, h_bm, h_wssid, h_wpass, h_wsync, h_sed, h_notif),
+            (
+                h_at,
+                h_ae,
+                h_br,
+                h_st,
+                h_bm,
+                h_wssid,
+                h_wpass,
+                h_wsync,
+                h_sed,
+                h_notif,
+                h_sgoal,
+            ),
         ) = self._ble.gatts_register_services(_SERVICES)
         self._handles = [
             h_ct,
@@ -163,6 +179,7 @@ class BLEWatch:
             h_wsync,
             h_sed,
             h_notif,
+            h_sgoal,
         ]
         # Seed static characteristic values
         self._ble.gatts_write(h_fw, FW_VERSION.encode())
@@ -174,6 +191,12 @@ class BLEWatch:
         self._ble.gatts_write(h_wsync, bytes([0x00]))
         self._ble.gatts_write(h_sed, struct.pack("<I", 0))  # 0 = never alerted
         self._ble.gatts_write(h_notif, b"")  # empty until written
+        goal = (
+            self._shared.get("step_goal", DEFAULT_STEP_GOAL)
+            if self._shared
+            else DEFAULT_STEP_GOAL
+        )
+        self._ble.gatts_write(h_sgoal, struct.pack("<H", goal))
 
     def _advertise(self):
         name = BLE_DEVICE_NAME.encode()
@@ -297,6 +320,16 @@ class BLEWatch:
                 # Empty write clears/dismisses any showing notification
                 self._mgr.hide_notification()
 
+        elif h == handles[_H_STEP_GOAL]:
+            if len(val) >= 2:
+                goal = struct.unpack("<H", val[:2])[0]
+                if 1 <= goal <= 65535:
+                    if self._shared is not None:
+                        self._shared["step_goal"] = goal
+                    if self._settings is not None:
+                        self._settings["step_goal"] = goal
+                    print("[BLE] Step goal:", goal)
+
         elif h == handles[_H_LOCAL_TIME]:
             pass  # Accept but ignore
 
@@ -338,6 +371,13 @@ class BLEWatch:
             # Return 0x01 if WiFi is configured, 0x00 if not
             has_wifi = bool((self._settings or {}).get("wifi_ssid", ""))
             self._ble.gatts_write(h, bytes([0x01 if has_wifi else 0x00]))
+        elif h == handles[_H_STEP_GOAL]:
+            goal = (
+                self._shared.get("step_goal", DEFAULT_STEP_GOAL)
+                if self._shared
+                else DEFAULT_STEP_GOAL
+            )
+            self._ble.gatts_write(h, struct.pack("<H", goal))
 
     # ── Notify helpers ────────────────────────────────────────────────────────
 

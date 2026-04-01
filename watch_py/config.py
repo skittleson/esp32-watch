@@ -71,6 +71,7 @@ UUID_WIFI_PASS_CHR = bluetooth.UUID("0000AA07-0000-1000-8000-00805F9B34FB")
 UUID_WIFI_SYNC_CHR = bluetooth.UUID("0000AA08-0000-1000-8000-00805F9B34FB")
 UUID_SEDENTARY_CHR = bluetooth.UUID("0000AA09-0000-1000-8000-00805F9B34FB")
 UUID_NOTIFICATION_CHR = bluetooth.UUID("0000AA0A-0000-1000-8000-00805F9B34FB")
+UUID_STEP_GOAL_CHR = bluetooth.UUID("0000AA0B-0000-1000-8000-00805F9B34FB")
 
 # ─── NTP / WiFi ───────────────────────────────────────────────────────────────
 NTP_SYNC_INTERVAL_MS = 8 * 60 * 60 * 1000  # 8 hours in ms
@@ -103,6 +104,75 @@ C_NEON_CYAN = 0x00FFFF  # Bright cyan — time, dividers
 C_NEON_MAGENTA = 0xFF00FF  # Magenta — step arc / accents
 C_NEON_LIME = 0x39FF14  # Lime — battery arc healthy
 C_NEON_BLUE = 0x4466FF  # Electric blue — tick marks
+
+# ─── Step goal ────────────────────────────────────────────────────────────────
+DEFAULT_STEP_GOAL = 7000
+
+# ─── Binary fonts (loaded at runtime from device filesystem) ─────────────────
+# The fs_driver module (frozen into the lvgl_micropython firmware) bridges
+# MicroPython's open() to LVGL's lv_fs so binfont_create can read .bin files.
+# Falls back to the largest compiled-in font (16px) if files are missing.
+_FONT_BIG = None
+_FONT_MED = None
+_FS_REGISTERED = False
+
+
+def _ensure_fs():
+    """Register the LVGL filesystem driver once."""
+    global _FS_REGISTERED
+    if _FS_REGISTERED:
+        return
+    try:
+        import lvgl as lv
+        import fs_driver
+
+        _fs_drv = lv.fs_drv_t()
+        fs_driver.fs_register(_fs_drv, "S")
+        _FS_REGISTERED = True
+    except Exception as e:
+        print("[FONT] fs_driver registration failed:", e)
+
+
+def _load_binfont(path):
+    """Try to load a binary font from the device filesystem."""
+    import lvgl as lv
+
+    _ensure_fs()
+    if not _FS_REGISTERED:
+        return None
+    try:
+        font = lv.binfont_create(path)
+        return font
+    except Exception as e:
+        print("[FONT] binfont load failed:", path, e)
+        return None
+
+
+def get_font_big():
+    """Return 42px font (time display). Falls back to 16px."""
+    global _FONT_BIG
+    if _FONT_BIG is None:
+        import lvgl as lv
+
+        _FONT_BIG = _load_binfont("S:fonts/montserrat_42.bin")
+        if _FONT_BIG is None:
+            print("[FONT] montserrat_42 not available, falling back to 16")
+            _FONT_BIG = lv.font_montserrat_16
+    return _FONT_BIG
+
+
+def get_font_medium():
+    """Return 32px font (seconds, secondary). Falls back to 14px."""
+    global _FONT_MED
+    if _FONT_MED is None:
+        import lvgl as lv
+
+        _FONT_MED = _load_binfont("S:fonts/montserrat_32.bin")
+        if _FONT_MED is None:
+            print("[FONT] montserrat_32 not available, falling back to 14")
+            _FONT_MED = lv.font_montserrat_14
+    return _FONT_MED
+
 
 # ─── Settings file ───────────────────────────────────────────────────────────
 SETTINGS_FILE = "/settings.json"

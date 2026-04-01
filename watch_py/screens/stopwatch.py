@@ -3,7 +3,7 @@
 # Layout:
 #   - Title "STOPWATCH" at top
 #   - Large arc progress (0-60s one full sweep, lap marker)
-#   - Centred time label MM:SS.cs (Montserrat 40)
+#   - Centred time label MM:SS.cs (Montserrat 28)
 #   - Status label (READY / RUNNING / PAUSED) with colour coding
 #   - Lap label when set
 #   - Hint labels at bottom
@@ -20,6 +20,7 @@ from config import (
     C_GREEN,
     C_ORANGE,
     C_GREY,
+    get_font_big,
 )
 
 _IDLE = const(0)
@@ -87,7 +88,7 @@ class Stopwatch:
 
         # ── Time label ───────────────────────────────────────────────────
         self._time_lbl = lv.label(scr)
-        self._time_lbl.set_style_text_font(lv.font_montserrat_16, 0)
+        self._time_lbl.set_style_text_font(get_font_big(), 0)
         self._time_lbl.set_style_text_color(_c(C_TEXT_PRI), 0)
         self._time_lbl.set_text("00:00.00")
         self._time_lbl.align(lv.ALIGN.CENTER, 0, -8)
