@@ -34,6 +34,7 @@ from config import (
     UUID_WIFI_SSID_CHR,
     UUID_WIFI_PASS_CHR,
     UUID_WIFI_SYNC_CHR,
+    UUID_SEDENTARY_CHR,
     FW_VERSION,
 )
 
@@ -89,6 +90,10 @@ _SERVICES = (
                 UUID_WIFI_SYNC_CHR,
                 _FLAG_READ | _FLAG_WRITE,
             ),  # write 0x01 to trigger sync now
+            (
+                UUID_SEDENTARY_CHR,
+                _FLAG_READ | _FLAG_NOTIFY,
+            ),  # uint32 epoch of last alert
         ),
     ),
 )
@@ -107,6 +112,7 @@ _H_BLE_MODE = const(9)
 _H_WIFI_SSID = const(10)
 _H_WIFI_PASS = const(11)
 _H_WIFI_SYNC = const(12)
+_H_SEDENTARY = const(13)  # uint32 epoch timestamp of last sedentary alert
 
 
 class BLEWatch:
@@ -136,7 +142,7 @@ class BLEWatch:
             (h_bat,),
             (h_fw,),
             (h_ess_temp,),
-            (h_at, h_ae, h_br, h_st, h_bm, h_wssid, h_wpass, h_wsync),
+            (h_at, h_ae, h_br, h_st, h_bm, h_wssid, h_wpass, h_wsync, h_sed),
         ) = self._ble.gatts_register_services(_SERVICES)
         self._handles = [
             h_ct,
@@ -152,6 +158,7 @@ class BLEWatch:
             h_wssid,
             h_wpass,
             h_wsync,
+            h_sed,
         ]
         # Seed static characteristic values
         self._ble.gatts_write(h_fw, FW_VERSION.encode())
@@ -161,6 +168,7 @@ class BLEWatch:
         self._ble.gatts_write(h_ess_temp, struct.pack("<h", 0))  # 0.00°C initial
         self._ble.gatts_write(h_wssid, b"")  # empty until set
         self._ble.gatts_write(h_wsync, bytes([0x00]))
+        self._ble.gatts_write(h_sed, struct.pack("<I", 0))  # 0 = never alerted
 
     def _advertise(self):
         name = BLE_DEVICE_NAME.encode()
@@ -309,6 +317,9 @@ class BLEWatch:
         elif h == handles[_H_WIFI_SSID]:
             ssid = (self._settings or {}).get("wifi_ssid", "")
             self._ble.gatts_write(h, ssid.encode())
+        elif h == handles[_H_SEDENTARY]:
+            epoch = self._shared.get("sedentary_epoch", 0) if self._shared else 0
+            self._ble.gatts_write(h, struct.pack("<I", epoch))
         elif h == handles[_H_WIFI_SYNC]:
             # Return 0x01 if WiFi is configured, 0x00 if not
             has_wifi = bool((self._settings or {}).get("wifi_ssid", ""))
@@ -329,6 +340,13 @@ class BLEWatch:
         h = self._handles[_H_STEPS]
         self._ble.gatts_write(h, struct.pack("<I", steps))
         self._ble.gatts_notify(self._conn, h)
+
+    def notify_sedentary(self, epoch):
+        """Notify phone of sedentary alert with epoch timestamp."""
+        h = self._handles[_H_SEDENTARY]
+        self._ble.gatts_write(h, struct.pack("<I", epoch))
+        if self._conn is not None:
+            self._ble.gatts_notify(self._conn, h)
 
     # ── tick() — call from main loop every ~500ms ─────────────────────────────
 

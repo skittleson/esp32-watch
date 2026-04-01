@@ -8,12 +8,15 @@
 import lvgl as lv
 import time
 from micropython import const
-from config import SCREEN_CLOCK, SCREEN_STOPWATCH, SCREEN_ALARM
+from config import SCREEN_CLOCK, SCREEN_STOPWATCH, SCREEN_ALARM, C_ORANGE, C_BG
 
 _SWIPE_DEBOUNCE_MS = 600  # ignore nav swipes within this window
 
 # Slide animation: 300ms, no delay
 _ANIM_TIME = const(300)
+
+# Toast duration: how long the sedentary banner stays visible
+_TOAST_DURATION_MS = const(5000)
 
 
 class ScreenManager:
@@ -25,6 +28,42 @@ class ScreenManager:
 
         # Load the initial screen (no animation on boot)
         lv.screen_load(clock._scr)
+
+        # ── Sedentary toast (always-on-top layer) ─────────────────────────
+        self._toast = None
+        self._toast_lbl = None
+        self._toast_shown_ms = 0
+        self._build_toast()
+
+    # ── Toast ────────────────────────────────────────────────────────────────
+
+    def _build_toast(self):
+        """Create sedentary alert banner parented to lv.layer_top()."""
+        top = lv.layer_top()
+        self._toast = lv.obj(top)
+        self._toast.set_size(200, 44)
+        self._toast.align(lv.ALIGN.TOP_MID, 0, 16)
+        self._toast.set_style_bg_color(lv.color_hex(C_ORANGE), 0)
+        self._toast.set_style_bg_opa(lv.OPA.COVER, 0)
+        self._toast.set_style_radius(22, 0)
+        self._toast.set_style_border_width(0, 0)
+        self._toast.set_style_shadow_width(0, 0)
+        self._toast.set_style_pad_all(0, 0)
+        self._toast.add_flag(lv.obj.FLAG.HIDDEN)
+
+        self._toast_lbl = lv.label(self._toast)
+        self._toast_lbl.set_style_text_font(lv.font_montserrat_14, 0)
+        self._toast_lbl.set_style_text_color(lv.color_hex(0x000000), 0)
+        self._toast_lbl.set_text("Move around!")
+        self._toast_lbl.center()
+
+    def show_sedentary_toast(self):
+        """Show the sedentary alert banner for _TOAST_DURATION_MS."""
+        self._toast.remove_flag(lv.obj.FLAG.HIDDEN)
+        self._toast_shown_ms = time.ticks_ms()
+
+    def hide_sedentary_toast(self):
+        self._toast.add_flag(lv.obj.FLAG.HIDDEN)
 
     # ── Navigation ───────────────────────────────────────────────────────────
 
@@ -68,6 +107,14 @@ class ScreenManager:
     def tick(self, shared):
         """Drive the active screen's update() method."""
         self._screens[self._active].update(shared)
+        # Auto-hide toast after duration
+        if (
+            self._toast_shown_ms
+            and time.ticks_diff(time.ticks_ms(), self._toast_shown_ms)
+            >= _TOAST_DURATION_MS
+        ):
+            self.hide_sedentary_toast()
+            self._toast_shown_ms = 0
 
     # ── Accessors ────────────────────────────────────────────────────────────
 

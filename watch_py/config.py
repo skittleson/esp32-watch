@@ -69,9 +69,14 @@ UUID_BLE_MODE_CHR = bluetooth.UUID("0000AA05-0000-1000-8000-00805F9B34FB")
 UUID_WIFI_SSID_CHR = bluetooth.UUID("0000AA06-0000-1000-8000-00805F9B34FB")
 UUID_WIFI_PASS_CHR = bluetooth.UUID("0000AA07-0000-1000-8000-00805F9B34FB")
 UUID_WIFI_SYNC_CHR = bluetooth.UUID("0000AA08-0000-1000-8000-00805F9B34FB")
+UUID_SEDENTARY_CHR = bluetooth.UUID("0000AA09-0000-1000-8000-00805F9B34FB")
 
 # ─── NTP / WiFi ───────────────────────────────────────────────────────────────
 NTP_SYNC_INTERVAL_MS = 8 * 60 * 60 * 1000  # 8 hours in ms
+
+# ─── Sedentary alert ──────────────────────────────────────────────────────────
+SEDENTARY_ALERT_MS = 30 * 60 * 1000  # alert after 30 min of inactivity
+SEDENTARY_MOVE_THRESHOLD = 0.04  # g — minimum acc delta to count as movement
 
 # ─── Screen IDs ──────────────────────────────────────────────────────────────
 SCREEN_CLOCK = 0

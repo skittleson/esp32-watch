@@ -28,7 +28,8 @@ It is intended for use by a developer or LLM building a companion app or UX.
 
 The Watch Custom Service exposes: Alarm Time (`AA01`), Alarm Enable (`AA02`),
 Brightness (`AA03`), Step Count (`AA04`), BLE Mode (`AA05`),
-WiFi SSID (`AA06`), WiFi Password (`AA07`), WiFi Sync (`AA08`).
+WiFi SSID (`AA06`), WiFi Password (`AA07`), WiFi Sync (`AA08`),
+Sedentary Alert (`AA09`).
 
 ---
 
@@ -272,6 +273,34 @@ in a read response for security.
 
 ---
 
+### Sedentary Alert — `0000AA09-0000-1000-8000-00805F9B34FB`
+**Properties:** READ, NOTIFY
+
+Unix epoch timestamp (seconds) of the last sedentary alert. `0` = never alerted.
+
+**Read/Notify format — 4 bytes:**
+
+| Byte | Field       | Type   | Notes                          |
+|------|-------------|--------|--------------------------------|
+| 0–3  | Epoch       | uint32 | Little-endian, seconds since 1970-01-01 UTC |
+
+**Alert conditions:**
+- No meaningful wrist movement for 30 consecutive minutes
+- Movement threshold: accelerometer delta > 0.04g on any axis
+- Resets on any touch, gesture, or wrist raise (WoM)
+
+**On alert:**
+1. Watch vibrates 3 short pulses (haptic motor)
+2. Orange "Move around!" banner slides in on the watch face for 5 seconds
+3. BLE notification sent to connected phone with the epoch timestamp
+4. `READ` returns the most recent alert epoch until the next alert
+
+**Notes:**
+- Alert fires at most once per idle window — resets after any movement
+- If RTC has not been synced, epoch will be seconds since boot (not wall time)
+
+---
+
 ### WiFi Sync — `0000AA08-0000-1000-8000-00805F9B34FB`
 **Properties:** READ, WRITE
 
@@ -394,6 +423,7 @@ BLE mode (0xAA05):          [EN]               → 0x00 or 0x01
 WiFi SSID (0xAA06):         UTF-8 string, max 32 chars
 WiFi pass (0xAA07):         UTF-8 string, write-only
 WiFi sync (0xAA08):         [0x01] = trigger now; read = [0x01] if configured
+Sedentary (0xAA09):         [S0,S1,S2,S3] → uint32 epoch of last alert; 0=never
 ```
 
 ---

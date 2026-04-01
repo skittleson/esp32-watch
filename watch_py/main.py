@@ -106,9 +106,12 @@ def main():
             buf = bytearray([reg]) + bytearray(data)
             self._dev.write(buf)
 
+    from hal.imu import SedentaryMonitor
+
     imu_i2c = I2CAdapter(touch.get_i2c_bus(), 0x6B)
     imu = QMI8658(imu_i2c)
     imu.set_steps(shared["steps"])
+    sedentary = SedentaryMonitor()
     bat = Battery()
     shared["bat_pct"] = bat.read_percent()
 
@@ -167,7 +170,30 @@ def main():
             shared["gyro"] = data["gyro"]
             shared["temp"] = data["temp"]
             shared["steps"] = data["steps"]
+            sedentary.update(data["acc"])
             last_imu_tick = now
+
+        # ── Sedentary alert ───────────────────────────────────────────────────
+        if sedentary.check():
+            epoch = sedentary.last_alert_epoch()
+            shared["sedentary_epoch"] = epoch
+            print("[SEDENTARY] Alert fired at epoch", epoch)
+            mgr.show_sedentary_toast()
+            ble_watch.notify_sedentary(epoch)
+            # Short 3-pulse haptic (borrow haptic pin briefly)
+            try:
+                from machine import Pin
+                from config import PIN_HAPTIC
+
+                h_pin = Pin(PIN_HAPTIC, Pin.OUT)
+                for _ in range(3):
+                    h_pin(1)
+                    time.sleep_ms(150)
+                    h_pin(0)
+                    time.sleep_ms(100)
+                Pin(PIN_HAPTIC, Pin.IN)  # release back to input
+            except Exception:
+                pass
 
         # ── Battery read every 30s ────────────────────────────────────────────
         if time.ticks_diff(now, last_bat_tick) >= 30_000:
@@ -199,6 +225,7 @@ def main():
         if t:
             last_activity = now
             dimmed = False
+            sedentary.reset()  # any touch = user is active
             was_off = display.is_off()
             if was_off:
                 display.on()
@@ -217,6 +244,7 @@ def main():
             shared["wom_wake"] = False
             last_activity = now
             dimmed = False
+            sedentary.reset()
             if display.is_off():
                 display.on()
 

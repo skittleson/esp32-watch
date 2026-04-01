@@ -6,7 +6,13 @@ from machine import Pin
 from micropython import const
 import math
 import time
-from config import STEP_MAG_THRESHOLD, STEP_LOCKOUT_MS, PIN_IMU_INT1
+from config import (
+    STEP_MAG_THRESHOLD,
+    STEP_LOCKOUT_MS,
+    PIN_IMU_INT1,
+    SEDENTARY_ALERT_MS,
+    SEDENTARY_MOVE_THRESHOLD,
+)
 
 # QMI8658 I2C address (SA0 tied to VDD on this board)
 _ADDR = const(0x6B)
@@ -141,3 +147,56 @@ class QMI8658:
 
         p = Pin(PIN_IMU_INT1, Pin.IN)
         p.irq(trigger=Pin.IRQ_RISING, handler=_wom_isr)
+
+
+class SedentaryMonitor:
+    """Tracks movement inactivity and fires an alert after SEDENTARY_ALERT_MS.
+
+    Call update(acc) at the IMU poll rate (~50Hz) with the current [ax,ay,az].
+    Call check() from the main loop — returns True once when the threshold is
+    crossed, then resets so it won't fire again until the next idle window.
+    Call reset() on any user activity (touch, gesture, display wake).
+    """
+
+    def __init__(self):
+        self._last_acc = [0.0, 0.0, 1.0]  # assume upright at start
+        self._idle_since = time.ticks_ms()  # when idle window started
+        self._alerted = False  # fired this idle window already
+        self._last_alert_epoch = 0  # unix timestamp of last alert
+
+    def update(self, acc):
+        """Feed latest accelerometer reading. Resets idle timer on movement."""
+        ax, ay, az = acc[0], acc[1], acc[2]
+        dx = abs(ax - self._last_acc[0])
+        dy = abs(ay - self._last_acc[1])
+        dz = abs(az - self._last_acc[2])
+        if (
+            dx > SEDENTARY_MOVE_THRESHOLD
+            or dy > SEDENTARY_MOVE_THRESHOLD
+            or dz > SEDENTARY_MOVE_THRESHOLD
+        ):
+            self._idle_since = time.ticks_ms()
+            self._alerted = False  # allow alert again next idle window
+        self._last_acc = [ax, ay, az]
+
+    def check(self):
+        """Return True exactly once per idle window when threshold exceeded."""
+        if self._alerted:
+            return False
+        if time.ticks_diff(time.ticks_ms(), self._idle_since) >= SEDENTARY_ALERT_MS:
+            self._alerted = True
+            # record epoch time if RTC is set
+            try:
+                self._last_alert_epoch = time.time()
+            except Exception:
+                self._last_alert_epoch = 0
+            return True
+        return False
+
+    def reset(self):
+        """Call on any user activity to restart the idle window."""
+        self._idle_since = time.ticks_ms()
+        self._alerted = False
+
+    def last_alert_epoch(self):
+        return self._last_alert_epoch
