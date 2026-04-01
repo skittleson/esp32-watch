@@ -31,3 +31,11 @@ class Battery:
 
     def cached_percent(self):
         return self._pct
+
+    def is_charging(self):
+        """Return True when USB is plugged in (voltage above full-charge threshold).
+        At 100% on battery the voltage is ~4.2V; on USB it reads >= 4.15V.
+        We use this as a proxy for 'plugged in' since there is no dedicated
+        VBUS/CHG pin exposed.
+        """
+        return self.read_voltage() >= 4.15

@@ -101,6 +101,7 @@ class BLEWatch:
         self._alarm = None
         self._mgr = None
         self._settings = None
+        self._battery = None
         # tick() timing state
         self._last_bat_notify = 0
         self._last_steps_notify = 0
@@ -272,11 +273,13 @@ class BLEWatch:
 
         now = time.ticks_ms()
 
-        # Advertising timeout: stop after BLE_TIMEOUT_MS if not connected
-        # and not in always-on mode
+        # Advertising timeout: stop after BLE_TIMEOUT_MS if not connected,
+        # not in always-on mode, and not plugged in (charging)
+        charging = self._battery.is_charging() if self._battery else False
         if (
             self._conn is None
             and not shared.get("ble_always", False)
+            and not charging
             and time.ticks_diff(now, self._timeout_start) >= BLE_TIMEOUT_MS
         ):
             self._stop_advertise()
@@ -295,13 +298,14 @@ class BLEWatch:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def start(self, shared, display, alarm, mgr, settings):
+    def start(self, shared, display, alarm, mgr, settings, battery=None):
         """Register GATT services and begin advertising immediately on boot."""
         self._shared = shared
         self._display = display
         self._alarm = alarm
         self._mgr = mgr
         self._settings = settings
+        self._battery = battery  # used to detect USB charging / plugged in
         self._register()
         self._advertise()  # advertise immediately on boot
 

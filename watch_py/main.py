@@ -134,7 +134,7 @@ def main():
     # ── BLE — starts advertising immediately, no _thread ─────────────────────
     from ble.service import ble_watch
 
-    ble_watch.start(shared, display, alarm, mgr, settings)
+    ble_watch.start(shared, display, alarm, mgr, settings, battery=bat)
 
     print("[WATCH] Running")
 
