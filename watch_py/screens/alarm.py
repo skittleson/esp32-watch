@@ -1,18 +1,47 @@
-# screens/alarm.py — Alarm screen using gc9a01 font modules
+# screens/alarm.py — LVGL alarm screen
+#
+# Normal view:
+#   - Title "ALARM"
+#   - Large time display (12h format, Montserrat 48)
+#   - Toggle switch (ON/OFF)
+#   - Status label
+#   - Hint label
+#
+# Fired view:
+#   - Animated red pulsing arc (lv.anim on arc bg colour)
+#   - Time centred
+#   - "TAP TO DISMISS" blinking label
+#   - Haptic pulses via GPIO5 (same as before)
+#
+# Tap on this screen: dismiss if firing, else toggle alarm on/off
+# GPIO5 haptic conflict: same fix as before — reattach_irq() called by main.py
 
+import lvgl as lv
 import time
-import gc9a01
-import vga2_bold_16x32  # 16x32 — alarm time display
-import vga1_8x16  # 8x16  — status, hints
-import vga1_8x8  # 8x8   — small hints
+from machine import Pin
+from config import (
+    C_BG,
+    C_SURFACE,
+    C_BORDER,
+    C_TEXT_PRI,
+    C_TEXT_SEC,
+    C_ACCENT,
+    C_GREEN,
+    C_RED,
+    C_YELLOW,
+    C_GREY,
+    PIN_HAPTIC,
+    PIN_TP_INT,
+)
 
-from machine import Pin, PWM
-from config import BLACK, WHITE, GREY, LGREY, GREEN, RED, YELLOW, PIN_HAPTIC, PIN_TP_INT
+
+def _c(h):
+    return lv.color_hex(h)
 
 
 class Alarm:
-    def __init__(self, settings):
-        self.dirty = True
+    def __init__(self, parent_screen, settings):
+        self._scr = parent_screen
         self._hour = settings.get("alarm_hour", 7)
         self._minute = settings.get("alarm_minute", 30)
         self._enabled = settings.get("alarm_enabled", False)
@@ -22,19 +51,164 @@ class Alarm:
         self._haptic_pulse = 0
         self._haptic_state = False
         self._haptic_pin = None
+        self._flash_state = False  # for pulsing arc colour
 
-    # ── Setters ─────────────────────────────────────────────────────────────
+        self._build_ui()
+        self._refresh_display()
+
+    # ── UI construction ──────────────────────────────────────────────────────
+
+    def _build_ui(self):
+        scr = self._scr
+        scr.set_style_bg_color(_c(C_BG), 0)
+        scr.set_style_bg_opa(lv.OPA.COVER, 0)
+
+        # ── Normal view container ─────────────────────────────────────────
+        self._normal = lv.obj(scr)
+        self._normal.set_size(240, 240)
+        self._normal.set_pos(0, 0)
+        self._normal.set_style_bg_opa(lv.OPA.TRANSP, 0)
+        self._normal.set_style_border_width(0, 0)
+        self._normal.set_style_pad_all(0, 0)
+
+        title = lv.label(self._normal)
+        title.set_style_text_font(lv.font_montserrat_16, 0)
+        title.set_style_text_color(_c(C_TEXT_SEC), 0)
+        title.set_text("ALARM")
+        title.align(lv.ALIGN.TOP_MID, 0, 18)
+
+        # Thin divider
+        line = lv.line(self._normal)
+        pts = [{"x": 50, "y": 0}, {"x": 190, "y": 0}]
+        line.set_points(pts, 2)
+        line.set_style_line_color(_c(C_BORDER), 0)
+        line.set_style_line_width(1, 0)
+        line.align(lv.ALIGN.TOP_MID, 0, 44)
+
+        # Alarm time display
+        self._time_lbl = lv.label(self._normal)
+        self._time_lbl.set_style_text_font(lv.font_montserrat_48, 0)
+        self._time_lbl.set_style_text_color(_c(C_TEXT_PRI), 0)
+        self._time_lbl.set_text("7:30")
+        self._time_lbl.align(lv.ALIGN.CENTER, -12, -22)
+
+        self._ampm_lbl = lv.label(self._normal)
+        self._ampm_lbl.set_style_text_font(lv.font_montserrat_16, 0)
+        self._ampm_lbl.set_style_text_color(_c(C_TEXT_SEC), 0)
+        self._ampm_lbl.set_text("AM")
+
+        # Toggle switch
+        self._sw = lv.switch(self._normal)
+        self._sw.set_size(56, 28)
+        self._sw.align(lv.ALIGN.CENTER, 0, 36)
+        self._sw.add_event_cb(self._on_switch, lv.EVENT.VALUE_CHANGED, None)
+
+        # Status label
+        self._status_lbl = lv.label(self._normal)
+        self._status_lbl.set_style_text_font(lv.font_montserrat_14, 0)
+        self._status_lbl.set_style_text_color(_c(C_TEXT_SEC), 0)
+        self._status_lbl.set_text("ALARM OFF")
+        self._status_lbl.align(lv.ALIGN.CENTER, 0, 72)
+
+        # Hint
+        hint = lv.label(self._normal)
+        hint.set_style_text_font(lv.font_montserrat_12, 0)
+        hint.set_style_text_color(_c(C_GREY), 0)
+        hint.set_text("tap switch or use BLE to set time")
+        hint.align(lv.ALIGN.BOTTOM_MID, 0, -16)
+
+        # ── Fired view (hidden by default) ───────────────────────────────
+        self._fired_view = lv.obj(scr)
+        self._fired_view.set_size(240, 240)
+        self._fired_view.set_pos(0, 0)
+        self._fired_view.set_style_bg_color(_c(C_RED), 0)
+        self._fired_view.set_style_bg_opa(lv.OPA.COVER, 0)
+        self._fired_view.set_style_border_width(0, 0)
+        self._fired_view.set_style_pad_all(0, 0)
+        self._fired_view.add_flag(lv.obj.FLAG.HIDDEN)
+
+        self._fire_time_lbl = lv.label(self._fired_view)
+        self._fire_time_lbl.set_style_text_font(lv.font_montserrat_48, 0)
+        self._fire_time_lbl.set_style_text_color(_c(0xFFFFFF), 0)
+        self._fire_time_lbl.set_text("7:30")
+        self._fire_time_lbl.align(lv.ALIGN.CENTER, 0, -20)
+
+        self._fire_ampm_lbl = lv.label(self._fired_view)
+        self._fire_ampm_lbl.set_style_text_font(lv.font_montserrat_16, 0)
+        self._fire_ampm_lbl.set_style_text_color(_c(0xFFFFFF), 0)
+        self._fire_ampm_lbl.set_text("AM")
+
+        self._dismiss_lbl = lv.label(self._fired_view)
+        self._dismiss_lbl.set_style_text_font(lv.font_montserrat_20, 0)
+        self._dismiss_lbl.set_style_text_color(_c(0xFFFFFF), 0)
+        self._dismiss_lbl.set_text("TAP TO DISMISS")
+        self._dismiss_lbl.align(lv.ALIGN.CENTER, 0, 50)
+
+        # Pulsing animation on fired view bg colour (red ↔ dark-red)
+        self._anim = lv.anim_t()
+        self._anim.init()
+        self._anim.set_var(self._fired_view)
+        self._anim.set_custom_exec_cb(self._pulse_anim_cb)
+        self._anim.set_values(0, 100)
+        self._anim.set_duration(500)
+        self._anim.set_playback_duration(500)
+        self._anim.set_repeat_count(lv.ANIM_REPEAT_INFINITE)
+
+    def _on_switch(self, e):
+        self._enabled = self._sw.has_state(lv.STATE.CHECKED)
+        self._dismissed = False
+        self._refresh_display()
+
+    @staticmethod
+    def _pulse_anim_cb(obj, val):
+        # val 0-100: interpolate bg between dark-red and bright-red
+        r = 100 + val
+        obj.set_style_bg_color(lv.color_make(r, 0, 0), 0)
+
+    # ── Display refresh ──────────────────────────────────────────────────────
+
+    def _refresh_display(self):
+        h12 = self._hour % 12 or 12
+        ampm = "AM" if self._hour < 12 else "PM"
+        time_str = "{:d}:{:02d}".format(h12, self._minute)
+
+        self._time_lbl.set_text(time_str)
+        self._ampm_lbl.set_text(ampm)
+        self._ampm_lbl.align_to(self._time_lbl, lv.ALIGN.OUT_RIGHT_TOP, 4, 6)
+
+        self._fire_time_lbl.set_text(time_str)
+        self._fire_ampm_lbl.set_text(ampm)
+        self._fire_ampm_lbl.align_to(self._fire_time_lbl, lv.ALIGN.OUT_RIGHT_TOP, 4, 6)
+
+        if self._enabled:
+            self._sw.add_state(lv.STATE.CHECKED)
+            self._status_lbl.set_text("ALARM ON")
+            self._status_lbl.set_style_text_color(_c(C_GREEN), 0)
+        else:
+            self._sw.clear_state(lv.STATE.CHECKED)
+            self._status_lbl.set_text("ALARM OFF")
+            self._status_lbl.set_style_text_color(_c(C_TEXT_SEC), 0)
+
+    # ── Gesture ──────────────────────────────────────────────────────────────
+
+    def handle_gesture(self, gesture):
+        if gesture == "single_click":
+            if self._fired:
+                self.dismiss()
+            # switch toggling is handled by the lv.switch callback directly
+
+    # ── Logic ────────────────────────────────────────────────────────────────
 
     def set_time(self, hour, minute):
         self._hour = hour
         self._minute = minute
         self._dismissed = False
-        self.dirty = True
+        self._refresh_display()
 
     def set_enabled(self, en):
         self._enabled = en
         self._dismissed = False
-        self.dirty = True
+        self._refresh_display()
 
     def get_hour(self):
         return self._hour
@@ -52,19 +226,6 @@ class Alarm:
             "alarm_enabled": self._enabled,
         }
 
-    # ── Gesture handling ─────────────────────────────────────────────────────
-
-    def handle_gesture(self, gesture):
-        if gesture == "single_click":
-            if self._fired:
-                self.dismiss()
-            else:
-                self._enabled = not self._enabled
-                self._dismissed = False
-                self.dirty = True
-
-    # ── Logic ────────────────────────────────────────────────────────────────
-
     def should_fire(self):
         if not self._enabled or self._fired or self._dismissed:
             return False
@@ -80,25 +241,30 @@ class Alarm:
         self._haptic_pulse = 0
         self._haptic_state = False
         self._fire_start = time.ticks_ms()
-        # GPIO5 is shared with the touch INT pin.
-        # Take ownership as output to drive haptic; touch IRQ is re-attached in dismiss().
+        # GPIO5 shared with touch INT — take ownership as haptic output
         self._haptic_pin = Pin(PIN_HAPTIC, Pin.OUT)
         self._haptic_pin(1)
-        self.dirty = True
+        # Show fired view, hide normal view
+        self._normal.add_flag(lv.obj.FLAG.HIDDEN)
+        self._fired_view.clear_flag(lv.obj.FLAG.HIDDEN)
+        lv.anim_t.start(self._anim)
 
     def dismiss(self):
         self._fired = False
         self._dismissed = True
+        lv.anim_t.del_all()  # stop pulse animation
         if self._haptic_pin:
             self._haptic_pin(0)
             self._haptic_pin = None
-        # Restore GPIO5 as input so the touch IRQ can be re-attached by the caller.
+        # Restore GPIO5 as input for touch IRQ reattachment by caller
         Pin(PIN_TP_INT, Pin.IN)
-        self.dirty = True
+        self._fired_view.add_flag(lv.obj.FLAG.HIDDEN)
+        self._normal.clear_flag(lv.obj.FLAG.HIDDEN)
+        self._fired_view.set_style_bg_color(_c(C_RED), 0)  # reset colour
 
-    # ── Tick (haptic + flash) ─────────────────────────────────────────────
+    # ── Tick (haptic, called from main loop) ─────────────────────────────────
 
-    def tick(self, tft):
+    def tick(self):
         if not self._fired:
             return
         elapsed = time.ticks_diff(time.ticks_ms(), self._fire_start)
@@ -122,50 +288,6 @@ class Alarm:
                 self._haptic_pin(0)
                 self._haptic_state = False
 
-        # Flash: alternate red/black every 500ms
-        bg = RED if (elapsed // 500) % 2 == 0 else BLACK
-        tft.fill(bg)
-        h12 = self._hour % 12 or 12
-        ampm = "AM" if self._hour < 12 else "PM"
-        time_str = "{:d}:{:02d}".format(h12, self._minute)
-        x = (240 - len(time_str) * 16 - 24) // 2
-        tft.text(vga2_bold_16x32, time_str, x, 85, WHITE, bg)
-        tft.text(vga1_8x8, ampm, x + len(time_str) * 16 + 4, 88, WHITE, bg)
-        msg = "TAP TO DISMISS"
-        tft.text(vga1_8x16, msg, (240 - len(msg) * 8) // 2, 175, WHITE, bg)
-
-    # ── Draw ────────────────────────────────────────────────────────────────
-
-    def draw(self, tft, shared):
-        if self._fired:
-            self.tick(tft)
-            return
-        if not self.dirty:
-            return
-        self._full_draw(tft)
-        self.dirty = False
-
-    def _full_draw(self, tft):
-        tft.fill(BLACK)
-        # Title
-        tft.text(vga1_8x16, "ALARM", (240 - 5 * 8) // 2, 22, LGREY, BLACK)
-        # Dividers
-        tft.fill_rect(20, 78, 200, 1, GREY)
-        tft.fill_rect(20, 158, 200, 1, GREY)
-        # Time — 12h format, vga2_bold_16x32
-        h12 = self._hour % 12 or 12
-        ampm = "AM" if self._hour < 12 else "PM"
-        time_str = "{:d}:{:02d}".format(h12, self._minute)
-        x = (240 - len(time_str) * 16 - 24) // 2
-        tft.text(vga2_bold_16x32, time_str, x, 95, WHITE, BLACK)
-        tft.text(vga1_8x8, ampm, x + len(time_str) * 16 + 4, 98, LGREY, BLACK)
-        # Status
-        if self._enabled:
-            label, color = "ALARM ON", GREEN
-        else:
-            label, color = "ALARM OFF", GREY
-        x = (240 - len(label) * 8) // 2
-        tft.text(vga1_8x16, label, x, 168, color, BLACK)
-        # Hint
-        hint = "Tap: toggle | BLE: set time"
-        tft.text(vga1_8x8, hint, (240 - len(hint) * 8) // 2, 215, GREY, BLACK)
+    def update(self, shared):
+        """Called by ScreenManager each tick when this screen is active."""
+        self.tick()

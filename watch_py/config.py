@@ -1,18 +1,16 @@
-# config.py — All pin numbers, UUIDs, timing constants, colours
+# config.py — All pin numbers, UUIDs, timing constants, LVGL theme colours
 # Waveshare ESP32-S3-Touch-LCD-1.28
 
 import bluetooth
-import gc9a01
 
 # ─── Pins ────────────────────────────────────────────────────────────────────
-# Display (GC9A01A via SPI1)
-# Source: https://github.com/russhughes/gc9a01_mpy/blob/main/tft_configs/ESP32-S3-LCD-1.28/tft_config.py
+# Display (GC9A01A via SPI2/host=1)
 PIN_LCD_DC = 8
 PIN_LCD_CS = 9
 PIN_LCD_CLK = 10
 PIN_LCD_MOSI = 11
-PIN_LCD_RST = 14  # reset — Waveshare C demo uses GPIO14 (not 12)
-PIN_LCD_BL_GPIO = 40  # backlight on/off — passed to gc9a01 driver
+PIN_LCD_RST = 14  # CRITICAL — Waveshare uses GPIO14, not 12
+PIN_LCD_BL_GPIO = 40  # backlight on/off managed by gc9a01 LVGL driver
 PIN_LCD_BL = 2  # backlight PWM for dimming
 
 # Touch (CST816S via I2C0)
@@ -27,7 +25,7 @@ PIN_IMU_INT1 = 4
 # Battery ADC
 PIN_BAT_ADC = 1
 
-# Haptic motor (MOSFET2 — shares GPIO with TP_INT; only driven during alarm)
+# Haptic motor — shares GPIO5 with TP_INT; only driven during alarm
 PIN_HAPTIC = 5
 
 # ─── Display / sleep ────────────────────────────────────────────────────────
@@ -72,17 +70,20 @@ SCREEN_CLOCK = 0
 SCREEN_STOPWATCH = 1
 SCREEN_ALARM = 2
 
-# ─── Colour palette (RGB565) ──────────────────────────────────────────────────
-BLACK = gc9a01.color565(0, 0, 0)
-WHITE = gc9a01.color565(255, 255, 255)
-GREY = gc9a01.color565(110, 110, 110)
-LGREY = gc9a01.color565(180, 180, 180)
-RED = gc9a01.color565(220, 40, 40)
-GREEN = gc9a01.color565(0, 200, 80)
-ORANGE = gc9a01.color565(255, 140, 0)
-CYAN = gc9a01.color565(0, 210, 210)
-YELLOW = gc9a01.color565(255, 210, 0)
+# ─── Dark theme palette (LVGL lv.color_hex) ──────────────────────────────────
+# Use lv.color_hex(0xRRGGBB) at runtime — do not import lv here (not yet inited)
+C_BG = 0x000000  # Pure black background
+C_SURFACE = 0x1A1A2E  # Deep navy card surface
+C_BORDER = 0x2A2A4A  # Subtle border
+C_TEXT_PRI = 0xEEEEEE  # Primary text — near-white
+C_TEXT_SEC = 0x888899  # Secondary / muted
+C_ACCENT = 0x00D4FF  # Cyan accent (time, active arc)
+C_GREEN = 0x00C853  # Running / OK
+C_ORANGE = 0xFF8C00  # Warning / paused
+C_RED = 0xFF3B30  # Alarm / low battery
+C_YELLOW = 0xFFD600  # Alarm indicator
+C_GREY = 0x555566  # Dividers / hints
 
 # ─── Settings file ───────────────────────────────────────────────────────────
 SETTINGS_FILE = "/settings.json"
-FW_VERSION = "1.0.0"
+FW_VERSION = "2.0.0-lvgl"

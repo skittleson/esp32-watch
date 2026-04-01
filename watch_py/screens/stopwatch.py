@@ -1,19 +1,33 @@
-# screens/stopwatch.py — Stopwatch using gc9a01 font modules
+# screens/stopwatch.py — LVGL stopwatch screen
+#
+# Layout:
+#   - Title "STOPWATCH" at top
+#   - Large arc progress (0-60s one full sweep, lap marker)
+#   - Centred time label MM:SS.cs (Montserrat 40)
+#   - Status label (READY / RUNNING / PAUSED) with colour coding
+#   - Lap label when set
+#   - Hint labels at bottom
 
+import lvgl as lv
 import time
-import gc9a01
-import vga2_bold_16x32  # 16x32 — stopwatch timer
-import vga1_8x16  # 8x16  — status, hint
-import vga1_8x8  # 8x8   — small hints
-
-from config import BLACK, WHITE, GREY, LGREY, GREEN, ORANGE
+from config import (
+    C_BG,
+    C_BORDER,
+    C_TEXT_PRI,
+    C_TEXT_SEC,
+    C_ACCENT,
+    C_GREEN,
+    C_ORANGE,
+    C_GREY,
+)
 
 _IDLE = const(0)
 _RUNNING = const(1)
 _PAUSED = const(2)
 
-_LABELS = {_IDLE: "TAP TO START", _RUNNING: "RUNNING", _PAUSED: "PAUSED"}
-_COLORS = {_IDLE: LGREY, _RUNNING: GREEN, _PAUSED: ORANGE}
+
+def _c(h):
+    return lv.color_hex(h)
 
 
 def _fmt_ms(ms):
@@ -22,13 +36,81 @@ def _fmt_ms(ms):
 
 
 class Stopwatch:
-    def __init__(self):
-        self.dirty = True
+    def __init__(self, parent_screen):
+        self._scr = parent_screen
         self._state = _IDLE
         self._elapsed = 0
         self._start = 0
-        self._lap_str = ""
-        self._prev_display = None
+        self._lap_ms = None
+
+        self._build_ui()
+
+    def _build_ui(self):
+        scr = self._scr
+        scr.set_style_bg_color(_c(C_BG), 0)
+        scr.set_style_bg_opa(lv.OPA.COVER, 0)
+
+        # ── Title ────────────────────────────────────────────────────────
+        title = lv.label(scr)
+        title.set_style_text_font(lv.font_montserrat_16, 0)
+        title.set_style_text_color(_c(C_TEXT_SEC), 0)
+        title.set_text("STOPWATCH")
+        title.align(lv.ALIGN.TOP_MID, 0, 18)
+
+        # ── Progress arc (full circle, 360°) ────────────────────────────
+        self._arc = lv.arc(scr)
+        self._arc.set_size(196, 196)
+        self._arc.center()
+        self._arc.set_bg_angles(0, 360)
+        self._arc.set_angles(0, 0)
+        self._arc.set_style_arc_color(_c(C_BORDER), lv.PART.MAIN)
+        self._arc.set_style_arc_width(5, lv.PART.MAIN)
+        self._arc.set_style_arc_color(_c(C_ACCENT), lv.PART.INDICATOR)
+        self._arc.set_style_arc_width(5, lv.PART.INDICATOR)
+        self._arc.remove_style(None, lv.PART.KNOB)
+        self._arc.clear_flag(lv.obj.FLAG.CLICKABLE)
+        self._arc.set_style_bg_opa(lv.OPA.TRANSP, 0)
+
+        # ── Lap tick mark (small arc segment) — hidden until set ─────────
+        self._lap_arc = lv.arc(scr)
+        self._lap_arc.set_size(196, 196)
+        self._lap_arc.center()
+        self._lap_arc.set_bg_angles(0, 0)  # invisible bg
+        self._lap_arc.set_angles(0, 0)
+        self._lap_arc.set_style_arc_color(_c(C_ORANGE), lv.PART.INDICATOR)
+        self._lap_arc.set_style_arc_width(5, lv.PART.INDICATOR)
+        self._lap_arc.remove_style(None, lv.PART.KNOB)
+        self._lap_arc.clear_flag(lv.obj.FLAG.CLICKABLE)
+        self._lap_arc.set_style_bg_opa(lv.OPA.TRANSP, 0)
+        self._lap_arc.add_flag(lv.obj.FLAG.HIDDEN)
+
+        # ── Time label ───────────────────────────────────────────────────
+        self._time_lbl = lv.label(scr)
+        self._time_lbl.set_style_text_font(lv.font_montserrat_40, 0)
+        self._time_lbl.set_style_text_color(_c(C_TEXT_PRI), 0)
+        self._time_lbl.set_text("00:00.00")
+        self._time_lbl.align(lv.ALIGN.CENTER, 0, -8)
+
+        # ── Status label ─────────────────────────────────────────────────
+        self._status_lbl = lv.label(scr)
+        self._status_lbl.set_style_text_font(lv.font_montserrat_16, 0)
+        self._status_lbl.set_style_text_color(_c(C_TEXT_SEC), 0)
+        self._status_lbl.set_text("TAP TO START")
+        self._status_lbl.align(lv.ALIGN.CENTER, 0, 34)
+
+        # ── Lap label ────────────────────────────────────────────────────
+        self._lap_lbl = lv.label(scr)
+        self._lap_lbl.set_style_text_font(lv.font_montserrat_14, 0)
+        self._lap_lbl.set_style_text_color(_c(C_ORANGE), 0)
+        self._lap_lbl.set_text("")
+        self._lap_lbl.align(lv.ALIGN.CENTER, 0, 58)
+
+        # ── Hints ────────────────────────────────────────────────────────
+        h1 = lv.label(scr)
+        h1.set_style_text_font(lv.font_montserrat_12, 0)
+        h1.set_style_text_color(_c(C_GREY), 0)
+        h1.set_text("swipe up: reset   hold: lap")
+        h1.align(lv.ALIGN.BOTTOM_MID, 0, -16)
 
     def handle_gesture(self, gesture):
         if gesture == "single_click":
@@ -38,58 +120,47 @@ class Stopwatch:
             else:
                 self._elapsed += time.ticks_diff(time.ticks_ms(), self._start)
                 self._state = _PAUSED
-            self.dirty = True
+            self._refresh_status()
+
         elif gesture == "swipe_up" and self._state != _RUNNING:
             self._elapsed = 0
             self._state = _IDLE
-            self._lap_str = ""
-            self.dirty = True
+            self._lap_ms = None
+            self._lap_arc.add_flag(lv.obj.FLAG.HIDDEN)
+            self._lap_lbl.set_text("")
+            self._arc.set_angles(0, 0)
+            self._time_lbl.set_text("00:00.00")
+            self._refresh_status()
+
         elif gesture == "long_press" and self._state == _RUNNING:
-            total = self._elapsed + time.ticks_diff(time.ticks_ms(), self._start)
-            self._lap_str = "LAP  " + _fmt_ms(total)
-            self.dirty = True
+            self._lap_ms = self._elapsed + time.ticks_diff(time.ticks_ms(), self._start)
+            self._lap_lbl.set_text("LAP  " + _fmt_ms(self._lap_ms))
+            # Show lap tick on arc
+            lap_deg = int((self._lap_ms % 60_000) * 360 // 60_000)
+            self._lap_arc.set_angles(lap_deg, (lap_deg + 4) % 360)
+            self._lap_arc.clear_flag(lv.obj.FLAG.HIDDEN)
+
+    def _refresh_status(self):
+        if self._state == _IDLE:
+            self._status_lbl.set_text("TAP TO START")
+            self._status_lbl.set_style_text_color(_c(C_TEXT_SEC), 0)
+        elif self._state == _RUNNING:
+            self._status_lbl.set_text("RUNNING")
+            self._status_lbl.set_style_text_color(_c(C_GREEN), 0)
+        else:
+            self._status_lbl.set_text("PAUSED")
+            self._status_lbl.set_style_text_color(_c(C_ORANGE), 0)
 
     def _current_ms(self):
         if self._state == _RUNNING:
             return self._elapsed + time.ticks_diff(time.ticks_ms(), self._start)
         return self._elapsed
 
-    def draw(self, tft, shared):
-        display_str = _fmt_ms(self._current_ms())
-        if not self.dirty and display_str == self._prev_display:
-            return
-        if self.dirty:
-            self._full_draw(tft, display_str)
-            self.dirty = False
-        else:
-            # Partial: only time area
-            tft.fill_rect(20, 88, 200, 40, BLACK)
-            x = (240 - len(display_str) * 16) // 2
-            tft.text(vga2_bold_16x32, display_str, x, 90, WHITE, BLACK)
-        self._prev_display = display_str
-
-    def _full_draw(self, tft, display_str):
-        tft.fill(BLACK)
-        # Title
-        title = "STOPWATCH"
-        tft.text(vga1_8x16, title, (240 - len(title) * 8) // 2, 22, LGREY, BLACK)
-        # Dividers
-        tft.fill_rect(20, 78, 200, 1, GREY)
-        tft.fill_rect(20, 145, 200, 1, GREY)
-        # Time — vga2_bold_16x32
-        x = (240 - len(display_str) * 16) // 2
-        tft.text(vga2_bold_16x32, display_str, x, 90, WHITE, BLACK)
-        # Status — vga1_8x16
-        label = _LABELS[self._state]
-        color = _COLORS[self._state]
-        x = (240 - len(label) * 8) // 2
-        tft.text(vga1_8x16, label, x, 155, color, BLACK)
-        # Lap
-        if self._lap_str:
-            x = (240 - len(self._lap_str) * 8) // 2
-            tft.text(vga1_8x16, self._lap_str, x, 178, LGREY, BLACK)
-        # Hints
-        h1 = "Swipe up: reset"
-        h2 = "Hold: lap"
-        tft.text(vga1_8x8, h1, (240 - len(h1) * 8) // 2, 208, GREY, BLACK)
-        tft.text(vga1_8x8, h2, (240 - len(h2) * 8) // 2, 220, GREY, BLACK)
+    def update(self, shared):
+        """Called each TaskHandler tick when this screen is active."""
+        ms = self._current_ms()
+        self._time_lbl.set_text(_fmt_ms(ms))
+        if self._state == _RUNNING:
+            # Arc sweeps one full rotation per 60s
+            deg = int((ms % 60_000) * 360 // 60_000)
+            self._arc.set_angles(0, deg)

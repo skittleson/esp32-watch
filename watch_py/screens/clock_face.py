@@ -1,12 +1,29 @@
-# screens/clock_face.py — Digital watch face using gc9a01 font modules
+# screens/clock_face.py — LVGL clock face
+#
+# Layout (240×240 round GC9A01):
+#   - Outer arc: battery level (bottom 270°, cyan → orange → red)
+#   - Inner ring arc: step progress toward 10k goal (top 270°, green)
+#   - Centre: large time label (Montserrat 48, 12h AM/PM)
+#   - AM/PM: small label top-right of time
+#   - Date: Montserrat 20, below time
+#   - Temp: bottom-left inside arc
+#   - BT / ALM indicators: top corners
 
+import lvgl as lv
 import time
-import gc9a01
-import vga2_bold_16x32  # 16x32 — large time display
-import vga1_8x16  # 8x16  — date, labels
-import vga1_8x8  # 8x8   — small indicators
-
-from config import BLACK, WHITE, GREY, LGREY, GREEN, ORANGE, RED, CYAN, YELLOW
+from config import (
+    C_BG,
+    C_SURFACE,
+    C_BORDER,
+    C_TEXT_PRI,
+    C_TEXT_SEC,
+    C_ACCENT,
+    C_GREEN,
+    C_ORANGE,
+    C_RED,
+    C_YELLOW,
+    C_GREY,
+)
 
 _DAYS = ("SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT")
 _MONTHS = (
@@ -24,130 +41,231 @@ _MONTHS = (
     "DEC",
 )
 
+_STEP_GOAL = const(10_000)
 
-def _fmt_time_12h(hour, minute, second):
-    """Return (time_str, ampm_str) in 12-hour format."""
-    ampm = "AM" if hour < 12 else "PM"
-    h12 = hour % 12
-    if h12 == 0:
-        h12 = 12
-    return "{:d}:{:02d}:{:02d}".format(h12, minute, second), ampm
+# Arc geometry — centred on 120,120; goes from 135° to 45° (270° sweep)
+# LVGL arc: start_angle is from 3 o'clock, CCW is positive
+# We want a bottom-heavy arc: from 135° (bottom-left) clockwise to 45° (bottom-right)
+_ARC_BG_START = const(135)
+_ARC_BG_END = const(45)
+
+
+def _c(hex_color):
+    return lv.color_hex(hex_color)
 
 
 class ClockFace:
-    def __init__(self):
-        self.dirty = True
-        self._dirty_time = True
+    def __init__(self, parent_screen):
+        self._scr = parent_screen
         self._ble_active = False
         self._alarm_on = False
+
+        self._build_ui()
+
+    def _build_ui(self):
+        scr = self._scr
+        scr.set_style_bg_color(_c(C_BG), 0)
+        scr.set_style_bg_opa(lv.OPA.COVER, 0)
+
+        # ── Battery arc (outer ring, bottom 270°) ─────────────────────────
+        self._bat_arc = lv.arc(scr)
+        self._bat_arc.set_size(220, 220)
+        self._bat_arc.center()
+        self._bat_arc.set_bg_angles(_ARC_BG_START, _ARC_BG_END)
+        self._bat_arc.set_angles(_ARC_BG_START, _ARC_BG_START)  # starts empty
+        self._bat_arc.set_style_arc_color(_c(C_BORDER), lv.PART.MAIN)
+        self._bat_arc.set_style_arc_width(6, lv.PART.MAIN)
+        self._bat_arc.set_style_arc_color(_c(C_ACCENT), lv.PART.INDICATOR)
+        self._bat_arc.set_style_arc_width(6, lv.PART.INDICATOR)
+        self._bat_arc.remove_style(None, lv.PART.KNOB)
+        self._bat_arc.clear_flag(lv.obj.FLAG.CLICKABLE)
+
+        # ── Step arc (inner ring, same geometry, dimmer green) ─────────────
+        self._step_arc = lv.arc(scr)
+        self._step_arc.set_size(204, 204)
+        self._step_arc.center()
+        self._step_arc.set_bg_angles(_ARC_BG_START, _ARC_BG_END)
+        self._step_arc.set_angles(_ARC_BG_START, _ARC_BG_START)
+        self._step_arc.set_style_arc_color(_c(C_BORDER), lv.PART.MAIN)
+        self._step_arc.set_style_arc_width(4, lv.PART.MAIN)
+        self._step_arc.set_style_arc_color(_c(C_GREEN), lv.PART.INDICATOR)
+        self._step_arc.set_style_arc_width(4, lv.PART.INDICATOR)
+        self._step_arc.remove_style(None, lv.PART.KNOB)
+        self._step_arc.clear_flag(lv.obj.FLAG.CLICKABLE)
+
+        # Make arcs transparent bg so round display bg shows through
+        self._bat_arc.set_style_bg_opa(lv.OPA.TRANSP, 0)
+        self._step_arc.set_style_bg_opa(lv.OPA.TRANSP, 0)
+
+        # ── Time label ────────────────────────────────────────────────────
+        self._time_lbl = lv.label(scr)
+        self._time_lbl.set_style_text_font(lv.font_montserrat_48, 0)
+        self._time_lbl.set_style_text_color(_c(C_TEXT_PRI), 0)
+        self._time_lbl.set_text("12:00")
+        self._time_lbl.align(lv.ALIGN.CENTER, -12, -18)
+
+        # ── AM/PM label ───────────────────────────────────────────────────
+        self._ampm_lbl = lv.label(scr)
+        self._ampm_lbl.set_style_text_font(lv.font_montserrat_16, 0)
+        self._ampm_lbl.set_style_text_color(_c(C_TEXT_SEC), 0)
+        self._ampm_lbl.set_text("AM")
+        # positioned relative to time label after first update
+
+        # ── Seconds label (small, below time) ────────────────────────────
+        self._sec_lbl = lv.label(scr)
+        self._sec_lbl.set_style_text_font(lv.font_montserrat_20, 0)
+        self._sec_lbl.set_style_text_color(_c(C_ACCENT), 0)
+        self._sec_lbl.set_text("00")
+        self._sec_lbl.align(lv.ALIGN.CENTER, 0, 28)
+
+        # ── Date label ────────────────────────────────────────────────────
+        self._date_lbl = lv.label(scr)
+        self._date_lbl.set_style_text_font(lv.font_montserrat_16, 0)
+        self._date_lbl.set_style_text_color(_c(C_TEXT_SEC), 0)
+        self._date_lbl.set_text("MON 01 JAN 2026")
+        self._date_lbl.align(lv.ALIGN.CENTER, 0, 56)
+
+        # ── Temp label (bottom-left) ──────────────────────────────────────
+        self._temp_lbl = lv.label(scr)
+        self._temp_lbl.set_style_text_font(lv.font_montserrat_14, 0)
+        self._temp_lbl.set_style_text_color(_c(C_TEXT_SEC), 0)
+        self._temp_lbl.set_text("--.-F")
+        self._temp_lbl.align(lv.ALIGN.CENTER, -46, 88)
+
+        # ── Step count label (bottom-right) ──────────────────────────────
+        self._steps_lbl = lv.label(scr)
+        self._steps_lbl.set_style_text_font(lv.font_montserrat_14, 0)
+        self._steps_lbl.set_style_text_color(_c(C_TEXT_SEC), 0)
+        self._steps_lbl.set_text("0 steps")
+        self._steps_lbl.align(lv.ALIGN.CENTER, 38, 88)
+
+        # ── BT indicator (top-left) ───────────────────────────────────────
+        self._bt_lbl = lv.label(scr)
+        self._bt_lbl.set_style_text_font(lv.font_montserrat_14, 0)
+        self._bt_lbl.set_style_text_color(_c(C_ACCENT), 0)
+        self._bt_lbl.set_text("BT")
+        self._bt_lbl.set_pos(14, 14)
+        self._bt_lbl.add_flag(lv.obj.FLAG.HIDDEN)
+
+        # ── ALM indicator (top-right) ─────────────────────────────────────
+        self._alm_lbl = lv.label(scr)
+        self._alm_lbl.set_style_text_font(lv.font_montserrat_14, 0)
+        self._alm_lbl.set_style_text_color(_c(C_YELLOW), 0)
+        self._alm_lbl.set_text("ALM")
+        self._alm_lbl.set_pos(194, 14)
+        self._alm_lbl.add_flag(lv.obj.FLAG.HIDDEN)
+
+        # ── Thin divider line below seconds ──────────────────────────────
+        line = lv.line(scr)
+        pts = [{"x": 60, "y": 0}, {"x": 180, "y": 0}]
+        line.set_points(pts, 2)
+        line.set_style_line_color(_c(C_BORDER), 0)
+        line.set_style_line_width(1, 0)
+        line.align(lv.ALIGN.CENTER, 0, 46)
+
+        # Cache previous values to avoid redundant label updates
         self._prev_time = None
         self._prev_ampm = None
+        self._prev_sec = None
+        self._prev_date = None
         self._prev_bat = None
         self._prev_steps = None
         self._prev_temp = None
 
+    # ── Indicator setters ────────────────────────────────────────────────────
+
     def set_ble_indicator(self, active):
         if active != self._ble_active:
             self._ble_active = active
-            self.dirty = True
+            if active:
+                self._bt_lbl.clear_flag(lv.obj.FLAG.HIDDEN)
+            else:
+                self._bt_lbl.add_flag(lv.obj.FLAG.HIDDEN)
 
     def set_alarm_indicator(self, active):
         if active != self._alarm_on:
             self._alarm_on = active
-            self.dirty = True
+            if active:
+                self._alm_lbl.clear_flag(lv.obj.FLAG.HIDDEN)
+            else:
+                self._alm_lbl.add_flag(lv.obj.FLAG.HIDDEN)
 
     def handle_gesture(self, gesture):
-        pass
+        pass  # clock face has no gesture actions
 
-    def mark_time_dirty(self):
-        self._dirty_time = True
+    # ── Update ───────────────────────────────────────────────────────────────
 
-    def draw(self, tft, shared):
-        now = time.localtime()
-        time_str, ampm = _fmt_time_12h(now[3], now[4], now[5])
+    def update(self, shared):
+        """Called by ScreenManager each TaskHandler tick when this screen is active."""
+        t = time.localtime()
+
+        # Time
+        hour = t[3]
+        minute = t[4]
+        second = t[5]
+        ampm = "AM" if hour < 12 else "PM"
+        h12 = hour % 12 or 12
+        time_str = "{:d}:{:02d}".format(h12, minute)
+        sec_str = "{:02d}".format(second)
+
+        if time_str != self._prev_time or ampm != self._prev_ampm:
+            self._time_lbl.set_text(time_str)
+            self._ampm_lbl.set_text(ampm)
+            # Align AM/PM to top-right of time label
+            self._ampm_lbl.align_to(self._time_lbl, lv.ALIGN.OUT_RIGHT_TOP, 4, 6)
+            self._prev_time = time_str
+            self._prev_ampm = ampm
+
+        if sec_str != self._prev_sec:
+            self._sec_lbl.set_text(sec_str)
+            self._prev_sec = sec_str
+
+        # Date
+        date_str = "{} {:02d} {} {}".format(_DAYS[t[6]], t[2], _MONTHS[t[1] - 1], t[0])
+        if date_str != self._prev_date:
+            self._date_lbl.set_text(date_str)
+            self._prev_date = date_str
+
+        # Battery arc + label
         bat_pct = shared.get("bat_pct", 100)
-        steps = shared.get("steps", 0)
-        temp = shared.get("temp", 0.0)
-
-        if self.dirty:
-            self._full_draw(tft, now, time_str, ampm, bat_pct, steps, temp)
-            self.dirty = self._dirty_time = False
-            self._prev_time = time_str
-            self._prev_ampm = ampm
-            self._prev_bat = bat_pct
-            self._prev_steps = steps
-            self._prev_temp = temp
-            return
-
-        if self._dirty_time or time_str != self._prev_time or ampm != self._prev_ampm:
-            self._draw_time(tft, time_str, ampm)
-            self._prev_time = time_str
-            self._prev_ampm = ampm
-            self._dirty_time = False
-
         if bat_pct != self._prev_bat:
-            self._draw_battery(tft, bat_pct)
+            self._update_bat_arc(bat_pct)
             self._prev_bat = bat_pct
 
+        # Steps arc + label
+        steps = shared.get("steps", 0)
         if steps != self._prev_steps:
-            self._draw_steps(tft, steps)
+            self._update_step_arc(steps)
             self._prev_steps = steps
 
+        # Temp label
+        temp = shared.get("temp", 0.0)
         if self._prev_temp is None or abs(temp - self._prev_temp) > 0.2:
-            self._draw_temp(tft, temp)
+            temp_f = temp * 9 / 5 + 32
+            self._temp_lbl.set_text("{:.1f}F".format(temp_f))
             self._prev_temp = temp
 
-    def _full_draw(self, tft, now, time_str, ampm, bat_pct, steps, temp):
-        tft.fill(BLACK)
-
-        # Corner indicators
-        if self._ble_active:
-            tft.text(vga1_8x8, "BT", 10, 10, CYAN, BLACK)
-        if self._alarm_on:
-            tft.text(vga1_8x8, "ALM", 200, 10, YELLOW, BLACK)
-
-        # Date — centred
-        date_str = "{} {:02d} {} {}".format(
-            _DAYS[now[6]], now[2], _MONTHS[now[1] - 1], now[0]
-        )
-        x = (240 - len(date_str) * 8) // 2
-        tft.text(vga1_8x16, date_str, x, 55, LGREY, BLACK)
-
-        # Divider lines
-        tft.fill_rect(20, 78, 200, 1, GREY)
-        tft.fill_rect(20, 155, 200, 1, GREY)
-
-        self._draw_time(tft, time_str, ampm)
-        self._draw_temp(tft, temp)
-        self._draw_battery(tft, bat_pct)
-        self._draw_steps(tft, steps)
-
-    def _draw_time(self, tft, time_str, ampm):
-        # Clear time + AM/PM area
-        tft.fill_rect(10, 83, 220, 42, BLACK)
-
-        # Time string — vga2_bold_16x32 (16px/char, 32px tall)
-        # Max "12:34:56" = 8 chars × 16 = 128px; shift left to make room for AM/PM
-        x = (240 - len(time_str) * 16 - 24) // 2  # 24px gap for AM/PM label
-        tft.text(vga2_bold_16x32, time_str, x, 85, WHITE, BLACK)
-
-        # AM/PM — vga1_8x8 (8px/char), top-right of time, vertically centred
-        tft.text(vga1_8x8, ampm, x + len(time_str) * 16 + 4, 88, LGREY, BLACK)
-
-    def _draw_temp(self, tft, temp):
-        tft.fill_rect(20, 162, 90, 16, BLACK)
-        tft.text(vga1_8x16, "{:.1f}F".format(temp * 9 / 5 + 32), 22, 163, WHITE, BLACK)
-
-    def _draw_battery(self, tft, pct):
-        tft.fill_rect(130, 162, 90, 16, BLACK)
-        colour = GREEN if pct > 50 else (ORANGE if pct > 20 else RED)
-        tft.text(vga1_8x16, "BAT {:d}%".format(pct), 132, 163, colour, BLACK)
-
-    def _draw_steps(self, tft, steps):
-        tft.fill_rect(20, 183, 200, 16, BLACK)
-        if steps >= 1000:
-            s = "{:d},{:03d} steps".format(steps // 1000, steps % 1000)
+    def _update_bat_arc(self, pct):
+        # Arc sweeps 270°; map pct 0-100 → 0-270 degrees from start
+        sweep = int(pct * 270 // 100)
+        end_angle = (_ARC_BG_START + sweep) % 360
+        self._bat_arc.set_angles(_ARC_BG_START, end_angle)
+        # Colour: green > 50%, orange > 20%, red otherwise
+        if pct > 50:
+            colour = C_ACCENT
+        elif pct > 20:
+            colour = C_ORANGE
         else:
-            s = "{:d} steps".format(steps)
-        x = (240 - len(s) * 8) // 2
-        tft.text(vga1_8x16, s, x, 184, LGREY, BLACK)
+            colour = C_RED
+        self._bat_arc.set_style_arc_color(_c(colour), lv.PART.INDICATOR)
+
+    def _update_step_arc(self, steps):
+        sweep = int(min(steps, _STEP_GOAL) * 270 // _STEP_GOAL)
+        end_angle = (_ARC_BG_START + sweep) % 360
+        self._step_arc.set_angles(_ARC_BG_START, end_angle)
+        # Format steps nicely
+        if steps >= 1000:
+            s = "{:d},{:03d}".format(steps // 1000, steps % 1000)
+        else:
+            s = str(steps)
+        self._steps_lbl.set_text(s + " steps")
