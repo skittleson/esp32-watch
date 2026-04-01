@@ -111,6 +111,8 @@ class ScreenManager:
         card.set_style_border_width(0, 0)
         card.set_style_pad_all(12, 0)
         card.set_style_shadow_width(0, 0)
+        # Let clicks pass through to the backdrop so tap-to-dismiss works
+        card.remove_flag(lv.obj.FLAG.CLICKABLE)
         self._notif_card = card
 
         # "NOTIFICATION" title bar
