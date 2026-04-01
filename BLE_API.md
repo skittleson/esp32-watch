@@ -29,7 +29,7 @@ It is intended for use by a developer or LLM building a companion app or UX.
 The Watch Custom Service exposes: Alarm Time (`AA01`), Alarm Enable (`AA02`),
 Brightness (`AA03`), Step Count (`AA04`), BLE Mode (`AA05`),
 WiFi SSID (`AA06`), WiFi Password (`AA07`), WiFi Sync (`AA08`),
-Sedentary Alert (`AA09`).
+Sedentary Alert (`AA09`), Notification (`AA0A`).
 
 ---
 
@@ -231,6 +231,38 @@ BLE stays on regardless.
 
 ---
 
+### Notification — `0000AA0A-0000-1000-8000-00805F9B34FB`
+**Properties:** WRITE only
+
+Push a text notification to the watch. The message appears as a full-screen
+overlay that the user must tap to dismiss. Navigation (swipes) is blocked
+while the overlay is visible.
+
+**Write format — variable length UTF-8 string (max 100 chars displayed):**
+
+| Bytes | Field   | Type         | Notes                          |
+|-------|---------|--------------|--------------------------------|
+| 0–N   | Message | UTF-8 string | Max 100 chars shown, longer truncated |
+
+**Example — "Meeting in 5 minutes":**
+```
+4D 65 65 74 69 6E 67 20 69 6E 20 35 20 6D 69 6E 75 74 65 73
+```
+
+**Behavior:**
+1. Watch shows a dark overlay with a cyan card containing the message
+2. "NOTIFICATION" title and "tap to dismiss" hint are shown
+3. User taps anywhere on the overlay to dismiss
+4. Writing an empty byte `0x00` or empty string dismisses any showing notification
+5. Swipe navigation is blocked until dismissed
+
+**Notes:**
+- Only one notification at a time. Writing a new message replaces any showing one.
+- There is no read-back — write-only.
+- Haptic is not triggered by BLE notifications (only sedentary alerts use haptic).
+
+---
+
 ### WiFi SSID — `0000AA06-0000-1000-8000-00805F9B34FB`
 **Properties:** READ, WRITE
 
@@ -424,6 +456,7 @@ WiFi SSID (0xAA06):         UTF-8 string, max 32 chars
 WiFi pass (0xAA07):         UTF-8 string, write-only
 WiFi sync (0xAA08):         [0x01] = trigger now; read = [0x01] if configured
 Sedentary (0xAA09):         [S0,S1,S2,S3] → uint32 epoch of last alert; 0=never
+Notification (0xAA0A):      UTF-8 string, write-only; empty = dismiss
 ```
 
 ---

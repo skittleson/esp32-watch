@@ -35,6 +35,7 @@ from config import (
     UUID_WIFI_PASS_CHR,
     UUID_WIFI_SYNC_CHR,
     UUID_SEDENTARY_CHR,
+    UUID_NOTIFICATION_CHR,
     FW_VERSION,
 )
 
@@ -94,6 +95,7 @@ _SERVICES = (
                 UUID_SEDENTARY_CHR,
                 _FLAG_READ | _FLAG_NOTIFY,
             ),  # uint32 epoch of last alert
+            (UUID_NOTIFICATION_CHR, _FLAG_WRITE),  # UTF-8 message → watch toast
         ),
     ),
 )
@@ -113,6 +115,7 @@ _H_WIFI_SSID = const(10)
 _H_WIFI_PASS = const(11)
 _H_WIFI_SYNC = const(12)
 _H_SEDENTARY = const(13)  # uint32 epoch timestamp of last sedentary alert
+_H_NOTIFICATION = const(14)  # write-only UTF-8 message → watch toast
 
 
 class BLEWatch:
@@ -142,7 +145,7 @@ class BLEWatch:
             (h_bat,),
             (h_fw,),
             (h_ess_temp,),
-            (h_at, h_ae, h_br, h_st, h_bm, h_wssid, h_wpass, h_wsync, h_sed),
+            (h_at, h_ae, h_br, h_st, h_bm, h_wssid, h_wpass, h_wsync, h_sed, h_notif),
         ) = self._ble.gatts_register_services(_SERVICES)
         self._handles = [
             h_ct,
@@ -159,6 +162,7 @@ class BLEWatch:
             h_wpass,
             h_wsync,
             h_sed,
+            h_notif,
         ]
         # Seed static characteristic values
         self._ble.gatts_write(h_fw, FW_VERSION.encode())
@@ -169,6 +173,7 @@ class BLEWatch:
         self._ble.gatts_write(h_wssid, b"")  # empty until set
         self._ble.gatts_write(h_wsync, bytes([0x00]))
         self._ble.gatts_write(h_sed, struct.pack("<I", 0))  # 0 = never alerted
+        self._ble.gatts_write(h_notif, b"")  # empty until written
 
     def _advertise(self):
         name = BLE_DEVICE_NAME.encode()
@@ -282,6 +287,15 @@ class BLEWatch:
             if len(val) >= 1 and val[0] == 0x01 and self._shared is not None:
                 self._shared["wifi_sync_now"] = True
                 print("[BLE] WiFi NTP sync requested")
+
+        elif h == handles[_H_NOTIFICATION]:
+            message = val.decode("utf-8", "ignore").strip("\x00")
+            if message and self._mgr:
+                self._mgr.show_notification(message)
+                print("[BLE] Notification:", message)
+            elif self._mgr:
+                # Empty write clears/dismisses any showing notification
+                self._mgr.hide_notification()
 
         elif h == handles[_H_LOCAL_TIME]:
             pass  # Accept but ignore

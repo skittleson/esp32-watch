@@ -233,7 +233,9 @@ def main():
             if t["gesture"] == "double_click":
                 ble_watch.activate()
                 print("[TOUCH] BLE re-activated")
-            elif t["gesture"] != "none" and not was_off:
+            elif t["gesture"] != "none" and not was_off and not mgr.notif_visible():
+                # Block screen navigation while a notification overlay is showing
+                # (the overlay dismisses itself via its own LVGL tap event)
                 prev_fired = alarm._fired
                 mgr.handle_gesture(t["gesture"])
                 if prev_fired and not alarm._fired:

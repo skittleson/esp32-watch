@@ -8,7 +8,14 @@
 import lvgl as lv
 import time
 from micropython import const
-from config import SCREEN_CLOCK, SCREEN_STOPWATCH, SCREEN_ALARM, C_ORANGE, C_BG
+from config import (
+    SCREEN_CLOCK,
+    SCREEN_STOPWATCH,
+    SCREEN_ALARM,
+    C_ORANGE,
+    C_BG,
+    C_ACCENT,
+)
 
 _SWIPE_DEBOUNCE_MS = 600  # ignore nav swipes within this window
 
@@ -34,6 +41,13 @@ class ScreenManager:
         self._toast_lbl = None
         self._toast_shown_ms = 0
         self._build_toast()
+
+        # ── BLE notification toast (tap-to-dismiss) ───────────────────────
+        self._notif = None
+        self._notif_lbl = None
+        self._notif_hint = None
+        self._notif_visible = False
+        self._build_notif()
 
     # ── Toast ────────────────────────────────────────────────────────────────
 
@@ -64,6 +78,81 @@ class ScreenManager:
 
     def hide_sedentary_toast(self):
         self._toast.add_flag(lv.obj.FLAG.HIDDEN)
+
+    # ── BLE notification overlay (tap-to-dismiss) ─────────────────────────────
+
+    def _build_notif(self):
+        """Full-screen notification overlay parented to lv.layer_top().
+        Sits above everything including the sedentary toast.
+        User must tap to dismiss.
+        """
+        top = lv.layer_top()
+
+        # Dark semi-transparent backdrop covering the full display
+        self._notif = lv.obj(top)
+        self._notif.set_size(240, 240)
+        self._notif.set_pos(0, 0)
+        self._notif.set_style_bg_color(lv.color_hex(0x000000), 0)
+        self._notif.set_style_bg_opa(lv.OPA._70, 0)
+        self._notif.set_style_border_width(0, 0)
+        self._notif.set_style_radius(0, 0)
+        self._notif.set_style_pad_all(0, 0)
+        self._notif.add_flag(lv.obj.FLAG.HIDDEN)
+        self._notif.add_flag(lv.obj.FLAG.CLICKABLE)
+        self._notif.add_event_cb(self._on_notif_tap, lv.EVENT.SHORT_CLICKED, None)
+
+        # Message card centred on screen
+        card = lv.obj(self._notif)
+        card.set_size(200, 140)
+        card.center()
+        card.set_style_bg_color(lv.color_hex(C_ACCENT), 0)
+        card.set_style_bg_opa(lv.OPA.COVER, 0)
+        card.set_style_radius(16, 0)
+        card.set_style_border_width(0, 0)
+        card.set_style_pad_all(12, 0)
+        card.set_style_shadow_width(0, 0)
+        self._notif_card = card
+
+        # "NOTIFICATION" title bar
+        title = lv.label(card)
+        title.set_style_text_font(lv.font_montserrat_12, 0)
+        title.set_style_text_color(lv.color_hex(0x000000), 0)
+        title.set_text("NOTIFICATION")
+        title.align(lv.ALIGN.TOP_MID, 0, 0)
+
+        # Message body — long text wraps
+        self._notif_lbl = lv.label(card)
+        self._notif_lbl.set_style_text_font(lv.font_montserrat_14, 0)
+        self._notif_lbl.set_style_text_color(lv.color_hex(0x000000), 0)
+        self._notif_lbl.set_long_mode(lv.label.LONG_MODE.WRAP)
+        self._notif_lbl.set_width(176)
+        self._notif_lbl.set_text("")
+        self._notif_lbl.align(lv.ALIGN.TOP_MID, 0, 22)
+
+        # Dismiss hint at bottom
+        self._notif_hint = lv.label(card)
+        self._notif_hint.set_style_text_font(lv.font_montserrat_12, 0)
+        self._notif_hint.set_style_text_color(lv.color_hex(0x000000), 0)
+        self._notif_hint.set_text("tap to dismiss")
+        self._notif_hint.align(lv.ALIGN.BOTTOM_MID, 0, 0)
+
+    def _on_notif_tap(self, e):
+        """LVGL tap handler — dismiss the notification overlay."""
+        self.hide_notification()
+
+    def show_notification(self, message):
+        """Display a BLE-pushed notification. Stays until tapped."""
+        # Truncate to 100 chars to avoid label overflow
+        self._notif_lbl.set_text(message[:100])
+        self._notif.remove_flag(lv.obj.FLAG.HIDDEN)
+        self._notif_visible = True
+
+    def hide_notification(self):
+        self._notif.add_flag(lv.obj.FLAG.HIDDEN)
+        self._notif_visible = False
+
+    def notif_visible(self):
+        return self._notif_visible
 
     # ── Navigation ───────────────────────────────────────────────────────────
 
