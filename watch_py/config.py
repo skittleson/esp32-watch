@@ -52,10 +52,12 @@ BLE_ALWAYS_ON_DEFAULT = False  # overridden at runtime when USB charging detecte
 UUID_CURRENT_TIME_SVC = bluetooth.UUID(0x1805)
 UUID_BATTERY_SVC = bluetooth.UUID(0x180F)
 UUID_DEVICE_INFO_SVC = bluetooth.UUID(0x180A)
+UUID_ENV_SENSING_SVC = bluetooth.UUID(0x181A)  # Environmental Sensing Service
 UUID_CURRENT_TIME_CHR = bluetooth.UUID(0x2A2B)
 UUID_LOCAL_TIME_CHR = bluetooth.UUID(0x2A0F)
 UUID_BATTERY_LEVEL_CHR = bluetooth.UUID(0x2A19)
 UUID_FIRMWARE_REV_CHR = bluetooth.UUID(0x2A26)
+UUID_TEMPERATURE_CHR = bluetooth.UUID(0x2A6E)  # sint16, 0.01°C resolution
 
 # Custom Watch Service / Characteristics
 UUID_WATCH_SVC = bluetooth.UUID("0000AA00-0000-1000-8000-00805F9B34FB")

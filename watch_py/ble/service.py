@@ -19,11 +19,13 @@ from config import (
     UUID_CURRENT_TIME_SVC,
     UUID_BATTERY_SVC,
     UUID_DEVICE_INFO_SVC,
+    UUID_ENV_SENSING_SVC,
     UUID_WATCH_SVC,
     UUID_CURRENT_TIME_CHR,
     UUID_LOCAL_TIME_CHR,
     UUID_BATTERY_LEVEL_CHR,
     UUID_FIRMWARE_REV_CHR,
+    UUID_TEMPERATURE_CHR,
     UUID_ALARM_TIME_CHR,
     UUID_ALARM_EN_CHR,
     UUID_BRIGHTNESS_CHR,
@@ -64,6 +66,11 @@ _SERVICES = (
         UUID_DEVICE_INFO_SVC,
         ((UUID_FIRMWARE_REV_CHR, _FLAG_READ),),
     ),
+    # Environmental Sensing Service (0x181A) — standard temperature
+    (
+        UUID_ENV_SENSING_SVC,
+        ((UUID_TEMPERATURE_CHR, _FLAG_READ),),
+    ),
     # Custom Watch Service
     (
         UUID_WATCH_SVC,
@@ -78,15 +85,16 @@ _SERVICES = (
 )
 
 # Handle indices (populated after register_services)
-_H_CURRENT_TIME = 0
-_H_LOCAL_TIME = 1
-_H_BAT_LEVEL = 2
-_H_FW_REV = 3
-_H_ALARM_TIME = 4
-_H_ALARM_EN = 5
-_H_BRIGHTNESS = 6
-_H_STEPS = 7
-_H_BLE_MODE = 8
+_H_CURRENT_TIME = const(0)
+_H_LOCAL_TIME = const(1)
+_H_BAT_LEVEL = const(2)
+_H_FW_REV = const(3)
+_H_ESS_TEMP = const(4)  # Environmental Sensing — Temperature (0x2A6E)
+_H_ALARM_TIME = const(5)
+_H_ALARM_EN = const(6)
+_H_BRIGHTNESS = const(7)
+_H_STEPS = const(8)
+_H_BLE_MODE = const(9)
 
 
 class BLEWatch:
@@ -115,14 +123,27 @@ class BLEWatch:
             (h_ct, h_lt),
             (h_bat,),
             (h_fw,),
+            (h_ess_temp,),
             (h_at, h_ae, h_br, h_st, h_bm),
         ) = self._ble.gatts_register_services(_SERVICES)
-        self._handles = [h_ct, h_lt, h_bat, h_fw, h_at, h_ae, h_br, h_st, h_bm]
+        self._handles = [
+            h_ct,
+            h_lt,
+            h_bat,
+            h_fw,
+            h_ess_temp,
+            h_at,
+            h_ae,
+            h_br,
+            h_st,
+            h_bm,
+        ]
         # Seed static characteristic values
         self._ble.gatts_write(h_fw, FW_VERSION.encode())
         self._ble.gatts_write(h_lt, bytes([0, 0]))  # UTC offset, DST
         self._ble.gatts_write(h_bat, bytes([100]))
         self._ble.gatts_write(h_st, struct.pack("<I", 0))
+        self._ble.gatts_write(h_ess_temp, struct.pack("<h", 0))  # 0.00°C initial
 
     def _advertise(self):
         name = BLE_DEVICE_NAME.encode()
@@ -228,7 +249,12 @@ class BLEWatch:
         handles = self._handles
         if self._shared is None:
             return
-        if h == handles[_H_BAT_LEVEL]:
+        if h == handles[_H_ESS_TEMP]:
+            # sint16, units = 0.01°C per GATT spec (0x2A6E)
+            temp_c = self._shared.get("temp", 0.0)
+            temp_int16 = max(-32768, min(32767, int(round(temp_c * 100))))
+            self._ble.gatts_write(h, struct.pack("<h", temp_int16))
+        elif h == handles[_H_BAT_LEVEL]:
             self._ble.gatts_write(h, bytes([self._shared.get("bat_pct", 100)]))
         elif h == handles[_H_STEPS]:
             self._ble.gatts_write(h, struct.pack("<I", self._shared.get("steps", 0)))
