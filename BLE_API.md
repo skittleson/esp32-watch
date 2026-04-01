@@ -26,6 +26,10 @@ It is intended for use by a developer or LLM building a companion app or UX.
 | Environmental Sensing   | `0x181A` | Standard |
 | Watch Custom Service    | `0000AA00-0000-1000-8000-00805F9B34FB` | Custom |
 
+The Watch Custom Service exposes: Alarm Time (`AA01`), Alarm Enable (`AA02`),
+Brightness (`AA03`), Step Count (`AA04`), BLE Mode (`AA05`),
+WiFi SSID (`AA06`), WiFi Password (`AA07`), WiFi Sync (`AA08`).
+
 ---
 
 ## 1. Current Time Service (`0x1805`)
@@ -226,6 +230,93 @@ BLE stays on regardless.
 
 ---
 
+### WiFi SSID — `0000AA06-0000-1000-8000-00805F9B34FB`
+**Properties:** READ, WRITE
+
+The SSID of the WiFi network used for NTP time sync. Max 32 UTF-8 characters.
+
+**Read/Write format — variable length UTF-8 string (no null terminator needed):**
+
+| Bytes | Field | Type        | Notes         |
+|-------|-------|-------------|---------------|
+| 0–N   | SSID  | UTF-8 string | Max 32 chars |
+
+**Example — set SSID to "MyNetwork":**
+```
+4D 79 4E 65 74 77 6F 72 6B
+```
+
+**Read response:** Returns the currently stored SSID, or empty bytes if not set.
+
+**Notes:** Persisted to `/settings.json` on write. Does not trigger a connection attempt.
+
+---
+
+### WiFi Password — `0000AA07-0000-1000-8000-00805F9B34FB`
+**Properties:** WRITE only
+
+The password for the WiFi network. Write-only — the password is never returned
+in a read response for security.
+
+**Write format — variable length UTF-8 string:**
+
+| Bytes | Field    | Type         | Notes         |
+|-------|----------|--------------|---------------|
+| 0–N   | Password | UTF-8 string | Max 64 chars |
+
+**Notes:**
+- Persisted to `/settings.json` immediately on write.
+- Stored as plaintext in the watch filesystem (no encryption).
+- To clear the password, write a single null byte `0x00` or empty string.
+- Does not trigger a connection attempt on its own.
+
+---
+
+### WiFi Sync — `0000AA08-0000-1000-8000-00805F9B34FB`
+**Properties:** READ, WRITE
+
+Trigger an immediate NTP time sync, or check if WiFi is configured.
+
+**Read response — 1 byte:**
+
+| Byte | Field       | Type  | Notes                          |
+|------|-------------|-------|--------------------------------|
+| 0    | Configured  | uint8 | `0x01` = SSID stored, `0x00` = not configured |
+
+**Write — 1 byte:**
+
+| Byte | Field  | Type  | Notes                       |
+|------|--------|-------|-----------------------------|
+| 0    | Trigger | uint8 | Write `0x01` to sync now   |
+
+**Behavior when `0x01` is written:**
+1. Watch queues a WiFi NTP sync on the next main loop iteration
+2. Connects to stored SSID, syncs time from `pool.ntp.org`, disconnects
+3. RTC is updated with local time (UTC-7 / PDT offset applied)
+4. Watch clock face reflects new time immediately
+
+**Notes:**
+- Sync is non-blocking relative to BLE — it runs on the main thread so
+  LVGL may pause briefly (~2–5s) during connect + NTP query.
+- If SSID is not configured, the sync is silently skipped.
+
+---
+
+## NTP Auto-Sync Behavior
+
+The watch syncs time automatically via WiFi in three situations:
+
+| Trigger | Condition |
+|---------|-----------|
+| **Boot** | WiFi credentials are stored in settings.json |
+| **USB plugged in** | Battery voltage crosses the charging threshold (4.15V) |
+| **Interval** | Every 8 hours while the watch is running |
+
+WiFi is only activated during sync and immediately disconnected afterward
+to conserve power. BLE and the display remain active during the sync.
+
+---
+
 ## Notification Summary
 
 | Characteristic | UUID     | Interval    | Trigger             |
@@ -275,6 +366,18 @@ All other characteristics are read-on-demand only.
 1. Enable notifications on Battery Level (`0x2A19`) — updates every 60s
 2. Enable notifications on Step Count (`0xAA04`) — updates every 10s
 
+### Configure WiFi for NTP Time Sync (first setup)
+1. Write SSID to WiFi SSID (`0xAA06`) — e.g. `"MyNetwork"`
+2. Write password to WiFi Password (`0xAA07`) — e.g. `"MyPassword"`
+3. Write `0x01` to WiFi Sync (`0xAA08`) to trigger an immediate sync
+4. Watch connects, syncs from `pool.ntp.org`, disconnects (~2–5s)
+5. Read WiFi Sync (`0xAA08`) → `0x01` confirms credentials are stored
+
+### Update WiFi Credentials
+1. Write new SSID to `0xAA06`
+2. Write new password to `0xAA07`
+3. Credentials are saved immediately — next sync uses the new network
+
 ---
 
 ## Wire Format Quick Reference
@@ -288,6 +391,9 @@ Alarm time (0xAA01):        [HR, MN]           → uint8 each
 Alarm enable (0xAA02):      [EN]               → 0x00 or 0x01
 Brightness (0xAA03):        [VAL]              → uint8 0–255
 BLE mode (0xAA05):          [EN]               → 0x00 or 0x01
+WiFi SSID (0xAA06):         UTF-8 string, max 32 chars
+WiFi pass (0xAA07):         UTF-8 string, write-only
+WiFi sync (0xAA08):         [0x01] = trigger now; read = [0x01] if configured
 ```
 
 ---

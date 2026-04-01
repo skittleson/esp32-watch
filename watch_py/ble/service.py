@@ -31,6 +31,9 @@ from config import (
     UUID_BRIGHTNESS_CHR,
     UUID_STEPS_CHR,
     UUID_BLE_MODE_CHR,
+    UUID_WIFI_SSID_CHR,
+    UUID_WIFI_PASS_CHR,
+    UUID_WIFI_SYNC_CHR,
     FW_VERSION,
 )
 
@@ -80,6 +83,12 @@ _SERVICES = (
             (UUID_BRIGHTNESS_CHR, _FLAG_READ | _FLAG_WRITE),
             (UUID_STEPS_CHR, _FLAG_READ | _FLAG_NOTIFY),
             (UUID_BLE_MODE_CHR, _FLAG_READ | _FLAG_WRITE),
+            (UUID_WIFI_SSID_CHR, _FLAG_READ | _FLAG_WRITE),  # UTF-8, max 32 chars
+            (UUID_WIFI_PASS_CHR, _FLAG_WRITE),  # write-only, never read back
+            (
+                UUID_WIFI_SYNC_CHR,
+                _FLAG_READ | _FLAG_WRITE,
+            ),  # write 0x01 to trigger sync now
         ),
     ),
 )
@@ -95,6 +104,9 @@ _H_ALARM_EN = const(6)
 _H_BRIGHTNESS = const(7)
 _H_STEPS = const(8)
 _H_BLE_MODE = const(9)
+_H_WIFI_SSID = const(10)
+_H_WIFI_PASS = const(11)
+_H_WIFI_SYNC = const(12)
 
 
 class BLEWatch:
@@ -124,7 +136,7 @@ class BLEWatch:
             (h_bat,),
             (h_fw,),
             (h_ess_temp,),
-            (h_at, h_ae, h_br, h_st, h_bm),
+            (h_at, h_ae, h_br, h_st, h_bm, h_wssid, h_wpass, h_wsync),
         ) = self._ble.gatts_register_services(_SERVICES)
         self._handles = [
             h_ct,
@@ -137,6 +149,9 @@ class BLEWatch:
             h_br,
             h_st,
             h_bm,
+            h_wssid,
+            h_wpass,
+            h_wsync,
         ]
         # Seed static characteristic values
         self._ble.gatts_write(h_fw, FW_VERSION.encode())
@@ -144,6 +159,8 @@ class BLEWatch:
         self._ble.gatts_write(h_bat, bytes([100]))
         self._ble.gatts_write(h_st, struct.pack("<I", 0))
         self._ble.gatts_write(h_ess_temp, struct.pack("<h", 0))  # 0.00°C initial
+        self._ble.gatts_write(h_wssid, b"")  # empty until set
+        self._ble.gatts_write(h_wsync, bytes([0x00]))
 
     def _advertise(self):
         name = BLE_DEVICE_NAME.encode()
@@ -240,6 +257,24 @@ class BLEWatch:
                     self._settings["ble_always"] = always
                 print("[BLE] Always-on:", always)
 
+        elif h == handles[_H_WIFI_SSID]:
+            ssid = val.decode("utf-8", "ignore").strip("\x00")
+            if self._settings is not None:
+                self._settings["wifi_ssid"] = ssid
+            print("[BLE] WiFi SSID set:", ssid)
+
+        elif h == handles[_H_WIFI_PASS]:
+            pw = val.decode("utf-8", "ignore").strip("\x00")
+            if self._settings is not None:
+                self._settings["wifi_pass"] = pw
+            print("[BLE] WiFi password updated ({} chars)".format(len(pw)))
+
+        elif h == handles[_H_WIFI_SYNC]:
+            # Write 0x01 to trigger an immediate NTP sync
+            if len(val) >= 1 and val[0] == 0x01 and self._shared is not None:
+                self._shared["wifi_sync_now"] = True
+                print("[BLE] WiFi NTP sync requested")
+
         elif h == handles[_H_LOCAL_TIME]:
             pass  # Accept but ignore
 
@@ -271,6 +306,13 @@ class BLEWatch:
         elif h == handles[_H_BLE_MODE]:
             always = self._shared.get("ble_always", False)
             self._ble.gatts_write(h, bytes([0x01 if always else 0x00]))
+        elif h == handles[_H_WIFI_SSID]:
+            ssid = (self._settings or {}).get("wifi_ssid", "")
+            self._ble.gatts_write(h, ssid.encode())
+        elif h == handles[_H_WIFI_SYNC]:
+            # Return 0x01 if WiFi is configured, 0x00 if not
+            has_wifi = bool((self._settings or {}).get("wifi_ssid", ""))
+            self._ble.gatts_write(h, bytes([0x01 if has_wifi else 0x00]))
 
     # ── Notify helpers ────────────────────────────────────────────────────────
 

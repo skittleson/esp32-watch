@@ -30,6 +30,7 @@ from config import (
     SCREEN_ALARM,
     SETTINGS_FILE,
     BLE_ALWAYS_ON_DEFAULT,
+    NTP_SYNC_INTERVAL_MS,
 )
 
 # ── Settings helpers ──────────────────────────────────────────────────────────
@@ -136,6 +137,13 @@ def main():
 
     ble_watch.start(shared, display, alarm, mgr, settings, battery=bat)
 
+    # ── WiFi / NTP ────────────────────────────────────────────────────────────
+    from hal.wifi import wifi_sync
+
+    # Attempt NTP sync on boot if credentials are stored
+    if wifi_sync.has_credentials(settings):
+        wifi_sync.sync(settings)
+
     print("[WATCH] Running")
 
     # ── Timing state ─────────────────────────────────────────────────────────
@@ -144,6 +152,8 @@ def main():
     last_bat_tick = time.ticks_ms()
     last_ble_tick = time.ticks_ms()
     last_persist_tick = time.ticks_ms()
+    last_ntp_tick = time.ticks_ms()
+    was_charging = bat.is_charging()
     dimmed = False
 
     # ── Main loop ─────────────────────────────────────────────────────────────
@@ -162,7 +172,22 @@ def main():
         # ── Battery read every 30s ────────────────────────────────────────────
         if time.ticks_diff(now, last_bat_tick) >= 30_000:
             shared["bat_pct"] = bat.read_percent()
+            # NTP sync when USB is first plugged in (charge event)
+            charging_now = bat.is_charging()
+            if charging_now and not was_charging:
+                shared["wifi_sync_now"] = True
+                print("[WATCH] Charge detected — queuing NTP sync")
+            was_charging = charging_now
             last_bat_tick = now
+
+        # ── NTP sync: every 8h, on charge, or BLE-triggered ──────────────────
+        if (
+            shared.pop("wifi_sync_now", False)
+            or time.ticks_diff(now, last_ntp_tick) >= NTP_SYNC_INTERVAL_MS
+        ):
+            if wifi_sync.has_credentials(settings):
+                wifi_sync.sync(settings)
+            last_ntp_tick = now
 
         # ── BLE tick every 500ms (timeout check + notify) ─────────────────────
         if time.ticks_diff(now, last_ble_tick) >= 500:
@@ -231,6 +256,8 @@ def main():
         if time.ticks_diff(now, last_persist_tick) >= 60_000:
             settings["steps"] = shared["steps"]
             settings["ble_always"] = shared.get("ble_always", False)
+            # wifi_ssid and wifi_pass are written directly into settings dict
+            # by ble/service.py write handler — just save whatever is there
             save_settings(settings)
             last_persist_tick = now
 
