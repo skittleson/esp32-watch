@@ -1,2 +1,4 @@
 .venv
 .ruff_cache
+pwa/cert.pem
+pwa/key.pem
