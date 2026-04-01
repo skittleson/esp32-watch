@@ -3,25 +3,22 @@
 # Architecture:
 #   Main thread (Core 1):
 #     - LVGL init + display/touch init
-#     - TaskHandler drives LVGL rendering (replaces dirty-flag while True)
-#     - Thin while True: touch poll → gesture → screen nav → alarm check →
-#       sleep timer → settings persist
-#     - All LVGL widget updates happen inside screen.update() called by mgr.tick()
-#       which is scheduled via a lv.timer (inside TaskHandler loop)
+#     - TaskHandler drives LVGL rendering
+#     - Main loop: IMU@20ms, battery@30s, touch gestures, screen updates,
+#       alarm check, sleep timer, BLE tick@500ms, settings persist@60s
 #
-#   _thread (Core 0): BLE IRQ + timeout/notify (unchanged from gc9a01 version)
-#
-# Key difference from gc9a01 version:
-#   - No manual tft.fill() / tft.text() calls anywhere
-#   - No dirty flags — LVGL handles invalidation automatically
-#   - TaskHandler.tick() replaces time.sleep_ms(10) busy loop
-#   - Screen objects own lv.screen instances created before lv.screen_load()
+#   BLE:
+#     - No _thread — _thread.stack_size() is broken on ESP32-S3 (#16129)
+#     - BLE IRQ runs on NimBLE's own FreeRTOS task (always was)
+#     - ble_watch.tick() called from main loop every 500ms handles
+#       advertising timeout and periodic notifications
+#     - Advertises immediately on boot; double-tap re-activates after timeout
 
 import time
 import ujson
 
 import lvgl as lv
-import task_handler  # lvgl_micropython task handler
+import task_handler
 
 from config import (
     PIN_TP_RST,
@@ -33,9 +30,6 @@ from config import (
     SCREEN_ALARM,
     SETTINGS_FILE,
 )
-
-# Set True to enable BLE background thread
-BLE_ENABLED = False
 
 # ── Settings helpers ──────────────────────────────────────────────────────────
 
@@ -70,16 +64,15 @@ def main():
         "temp": 0.0,
         "acc": [0.0, 0.0, 0.0],
         "gyro": [0.0, 0.0, 0.0],
-        "ble_active": settings.get("ble_always", False),
+        "ble_active": False,
         "ble_always": settings.get("ble_always", False),
     }
 
-    # ── Display + LVGL init ────────────────────────────────────────────────
+    # ── Display + LVGL init ───────────────────────────────────────────────────
     from hal.display import Display
 
     display = Display()
 
-    # Restore saved brightness
     saved_br = settings.get("brightness", None)
     if saved_br is not None:
         display.set_brightness_from_ble(saved_br)
@@ -89,13 +82,12 @@ def main():
 
     touch = CST816S(rst_pin=PIN_TP_RST, int_pin=PIN_TP_INT)
 
-    # ── IMU + Battery — IMU shares the i2c bus via thin adapter ───────────────
+    # ── IMU + Battery — IMU shares i2c bus via adapter ───────────────────────
     from hal.imu import QMI8658
     from hal.battery import Battery
 
-    # Wrap LVGL i2c bus so IMU can call readfrom_mem / writeto_mem
     class I2CAdapter:
-        """Adapts i2c.I2C.Bus to machine.I2C-like readfrom_mem/writeto_mem API."""
+        """Adapts i2c.I2C.Bus to readfrom_mem/writeto_mem for QMI8658."""
 
         def __init__(self, lvgl_bus, addr):
             import i2c as _i2c
@@ -118,7 +110,7 @@ def main():
     bat = Battery()
     shared["bat_pct"] = bat.read_percent()
 
-    # ── Create LVGL screens + screen objects ───────────────────────────────
+    # ── LVGL screens ─────────────────────────────────────────────────────────
     from screens.clock_face import ClockFace
     from screens.stopwatch import Stopwatch
     from screens.alarm import Alarm
@@ -135,32 +127,29 @@ def main():
     mgr = ScreenManager(clock_face, stopwatch, alarm)
     mgr.set_alarm_indicator(alarm.get_enabled())
 
-    # ── TaskHandler — drives LVGL rendering loop ───────────────────────────
-    # duration=10ms is comfortable for this display; set lower if animations stutter
+    # ── TaskHandler — drives LVGL rendering loop ──────────────────────────────
     th = task_handler.TaskHandler(duration=10)
 
-    # ── BLE (optional — starts _thread internally) ─────────────────────────
-    if BLE_ENABLED:
-        from ble.service import ble_watch
+    # ── BLE — starts advertising immediately, no _thread ─────────────────────
+    from ble.service import ble_watch
 
-        ble_watch.start(shared, display, alarm, mgr, settings)
-        if shared["ble_always"]:
-            ble_watch.activate()
+    ble_watch.start(shared, display, alarm, mgr, settings)
 
     print("[WATCH] Running")
 
-    # ── Timing state ───────────────────────────────────────────────────────
+    # ── Timing state ─────────────────────────────────────────────────────────
     last_activity = time.ticks_ms()
     last_imu_tick = time.ticks_ms()
     last_bat_tick = time.ticks_ms()
+    last_ble_tick = time.ticks_ms()
     last_persist_tick = time.ticks_ms()
     dimmed = False
 
-    # ── Main loop ──────────────────────────────────────────────────────────
+    # ── Main loop ─────────────────────────────────────────────────────────────
     while True:
         now = time.ticks_ms()
 
-        # ── IMU poll at ~50Hz (20ms) ───────────────────────────────────────
+        # ── IMU poll at ~50Hz (20ms) ──────────────────────────────────────────
         if time.ticks_diff(now, last_imu_tick) >= 20:
             data = imu.read()
             shared["acc"] = data["acc"]
@@ -169,12 +158,17 @@ def main():
             shared["steps"] = data["steps"]
             last_imu_tick = now
 
-        # ── Battery read every 30s ─────────────────────────────────────────
+        # ── Battery read every 30s ────────────────────────────────────────────
         if time.ticks_diff(now, last_bat_tick) >= 30_000:
             shared["bat_pct"] = bat.read_percent()
             last_bat_tick = now
 
-        # ── Touch gesture poll (for screen navigation) ─────────────────────
+        # ── BLE tick every 500ms (timeout check + notify) ─────────────────────
+        if time.ticks_diff(now, last_ble_tick) >= 500:
+            ble_watch.tick(shared)
+            last_ble_tick = now
+
+        # ── Touch gesture poll ────────────────────────────────────────────────
         t = touch.poll()
         if t:
             last_activity = now
@@ -183,17 +177,16 @@ def main():
             if was_off:
                 display.on()
 
-            if t["gesture"] == "double_click" and BLE_ENABLED:
-                shared["ble_active"] = True
+            if t["gesture"] == "double_click":
                 ble_watch.activate()
-                print("[TOUCH] BLE activated")
+                print("[TOUCH] BLE re-activated")
             elif t["gesture"] != "none" and not was_off:
                 prev_fired = alarm._fired
                 mgr.handle_gesture(t["gesture"])
                 if prev_fired and not alarm._fired:
                     touch.reattach_irq()
 
-        # ── WoM wake ──────────────────────────────────────────────────────
+        # ── WoM wake ─────────────────────────────────────────────────────────
         if shared.get("wom_wake"):
             shared["wom_wake"] = False
             last_activity = now
@@ -201,18 +194,11 @@ def main():
             if display.is_off():
                 display.on()
 
-        # ── BLE double-click activation from shared ────────────────────────
-        if BLE_ENABLED and shared.get("ble_active") and not ble_watch.is_active():
-            ble_watch.activate()
-            shared["ble_active"] = True
-
-        # ── Screen update (widget data) ────────────────────────────────────
-        # mgr.tick() calls active_screen.update(shared) which updates LVGL
-        # widget properties. TaskHandler drives rendering automatically.
+        # ── Screen update ─────────────────────────────────────────────────────
         if not display.is_off():
             mgr.tick(shared)
 
-        # ── Alarm check ────────────────────────────────────────────────────
+        # ── Alarm check ───────────────────────────────────────────────────────
         if alarm.should_fire():
             alarm.fire()
             display.on()
@@ -226,7 +212,7 @@ def main():
         if prev_fired and not alarm._fired:
             touch.reattach_irq()
 
-        # ── Sleep timer ────────────────────────────────────────────────────
+        # ── Sleep timer ───────────────────────────────────────────────────────
         idle = time.ticks_diff(now, last_activity)
         if idle >= DISPLAY_OFF_MS and not display.is_off():
             display.off()
@@ -240,7 +226,7 @@ def main():
             display.on()
             dimmed = False
 
-        # ── Persist settings every 60s ─────────────────────────────────────
+        # ── Persist settings every 60s ────────────────────────────────────────
         if time.ticks_diff(now, last_persist_tick) >= 60_000:
             settings["steps"] = shared["steps"]
             settings["ble_always"] = shared.get("ble_always", False)

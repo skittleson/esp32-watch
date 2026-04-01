@@ -1,13 +1,17 @@
-# ble/service.py — Raw bluetooth GATT server (no asyncio, runs in _thread)
+# ble/service.py — Raw bluetooth GATT server (no _thread)
 #
-# Architecture: BLE runs entirely via IRQ callbacks on a background _thread.
-# The main display loop never touches bluetooth.
-# Shared state is passed via a thread-safe dict (GIL ensures atomic dict ops).
+# Architecture: BLE runs entirely via IRQ callbacks on the NimBLE internal task.
+# The main loop calls ble_watch.tick() every 500ms to handle advertising timeout
+# and periodic notifications. No _thread — _thread.stack_size() is broken on
+# ESP32-S3 (MicroPython issue #16129) and _thread is not needed since BLE IRQs
+# already run on their own FreeRTOS task.
+#
+# BLE starts advertising automatically on boot. Double-tap re-activates it after
+# timeout.
 
 import bluetooth
 import struct
 import time
-import _thread
 from micropython import const
 from config import (
     BLE_DEVICE_NAME,
@@ -46,73 +50,38 @@ _SERVICES = (
     (
         UUID_CURRENT_TIME_SVC,
         (
-            (
-                UUID_CURRENT_TIME_CHR,
-                _FLAG_WRITE | _FLAG_NOTIFY,
-            ),
-            (
-                UUID_LOCAL_TIME_CHR,
-                _FLAG_READ | _FLAG_WRITE,
-            ),
+            (UUID_CURRENT_TIME_CHR, _FLAG_WRITE | _FLAG_NOTIFY),
+            (UUID_LOCAL_TIME_CHR, _FLAG_READ | _FLAG_WRITE),
         ),
     ),
     # Battery Service (0x180F)
     (
         UUID_BATTERY_SVC,
-        (
-            (
-                UUID_BATTERY_LEVEL_CHR,
-                _FLAG_READ | _FLAG_NOTIFY,
-            ),
-        ),
+        ((UUID_BATTERY_LEVEL_CHR, _FLAG_READ | _FLAG_NOTIFY),),
     ),
     # Device Information (0x180A)
     (
         UUID_DEVICE_INFO_SVC,
-        (
-            (
-                UUID_FIRMWARE_REV_CHR,
-                _FLAG_READ,
-            ),
-        ),
+        ((UUID_FIRMWARE_REV_CHR, _FLAG_READ),),
     ),
     # Custom Watch Service
     (
         UUID_WATCH_SVC,
         (
-            (
-                UUID_ALARM_TIME_CHR,
-                _FLAG_READ | _FLAG_WRITE,
-            ),
-            (
-                UUID_ALARM_EN_CHR,
-                _FLAG_READ | _FLAG_WRITE,
-            ),
-            (
-                UUID_BRIGHTNESS_CHR,
-                _FLAG_READ | _FLAG_WRITE,
-            ),
-            (
-                UUID_STEPS_CHR,
-                _FLAG_READ | _FLAG_NOTIFY,
-            ),
-            (
-                UUID_BLE_MODE_CHR,
-                _FLAG_READ | _FLAG_WRITE,
-            ),
+            (UUID_ALARM_TIME_CHR, _FLAG_READ | _FLAG_WRITE),
+            (UUID_ALARM_EN_CHR, _FLAG_READ | _FLAG_WRITE),
+            (UUID_BRIGHTNESS_CHR, _FLAG_READ | _FLAG_WRITE),
+            (UUID_STEPS_CHR, _FLAG_READ | _FLAG_NOTIFY),
+            (UUID_BLE_MODE_CHR, _FLAG_READ | _FLAG_WRITE),
         ),
     ),
 )
 
 # Handle indices (populated after register_services)
-# Current Time Service
 _H_CURRENT_TIME = 0
 _H_LOCAL_TIME = 1
-# Battery
 _H_BAT_LEVEL = 2
-# Device Info
 _H_FW_REV = 3
-# Watch service
 _H_ALARM_TIME = 4
 _H_ALARM_EN = 5
 _H_BRIGHTNESS = 6
@@ -127,13 +96,16 @@ class BLEWatch:
         self._conn = None
         self._active = False
         self._timeout_start = 0
-        self._shared = None  # set by start()
+        self._shared = None
         self._display = None
         self._alarm = None
         self._mgr = None
         self._settings = None
+        # tick() timing state
+        self._last_bat_notify = 0
+        self._last_steps_notify = 0
 
-    # ── Setup ──────────────────────────────────────────────────────────────
+    # ── Setup ─────────────────────────────────────────────────────────────────
 
     def _register(self):
         self._ble.active(True)
@@ -145,17 +117,16 @@ class BLEWatch:
             (h_at, h_ae, h_br, h_st, h_bm),
         ) = self._ble.gatts_register_services(_SERVICES)
         self._handles = [h_ct, h_lt, h_bat, h_fw, h_at, h_ae, h_br, h_st, h_bm]
-        # Seed static values
+        # Seed static characteristic values
         self._ble.gatts_write(h_fw, FW_VERSION.encode())
-        self._ble.gatts_write(h_lt, bytes([0, 0]))  # UTC offset 0, DST 0
+        self._ble.gatts_write(h_lt, bytes([0, 0]))  # UTC offset, DST
         self._ble.gatts_write(h_bat, bytes([100]))
         self._ble.gatts_write(h_st, struct.pack("<I", 0))
 
-    def _advertise(self, timeout_ms=None):
+    def _advertise(self):
         name = BLE_DEVICE_NAME.encode()
-        # AD: Flags (0x01), Complete Local Name (0x09)
         payload = bytes([2, 0x01, 0x06]) + bytes([1 + len(name), 0x09]) + name
-        self._ble.gap_advertise(100_000, adv_data=payload)  # 100ms interval
+        self._ble.gap_advertise(100_000, adv_data=payload)
         self._active = True
         self._timeout_start = time.ticks_ms()
         print("[BLE] Advertising as", BLE_DEVICE_NAME)
@@ -164,13 +135,13 @@ class BLEWatch:
         self._ble.gap_advertise(None)
         self._active = False
 
-    # ── IRQ handler ────────────────────────────────────────────────────────
+    # ── IRQ handler ───────────────────────────────────────────────────────────
 
     def _irq(self, event, data):
         if event == _IRQ_CENTRAL_CONNECT:
             conn_handle, _, _ = data
             self._conn = conn_handle
-            self._ble.gap_advertise(None)  # stop advertising while connected
+            self._ble.gap_advertise(None)
             print("[BLE] Connected:", conn_handle)
             if self._mgr:
                 self._mgr.set_ble_indicator(True)
@@ -178,8 +149,10 @@ class BLEWatch:
         elif event == _IRQ_CENTRAL_DISCONNECT:
             self._conn = None
             print("[BLE] Disconnected")
-            # Restart advertising if still active
-            if self._active and self._shared:
+            if self._mgr:
+                self._mgr.set_ble_indicator(False)
+            # Restart advertising if still in active window or always-on
+            if self._active or (self._shared and self._shared.get("ble_always")):
                 self._advertise()
 
         elif event == _IRQ_GATTS_WRITE:
@@ -190,14 +163,13 @@ class BLEWatch:
             conn_handle, attr_handle = data
             self._handle_read(attr_handle)
 
-    # ── Write handler ─────────────────────────────────────────────────────
+    # ── Write handler ─────────────────────────────────────────────────────────
 
     def _handle_write(self, h):
         handles = self._handles
         val = self._ble.gatts_read(h)
 
         if h == handles[_H_CURRENT_TIME]:
-            # 10-byte Current Time: year(LE u16), month, day, hour, min, sec, ...
             if len(val) >= 7:
                 yr = struct.unpack_from("<H", val, 0)[0]
                 mo, dy, hr, mn, sc = val[2], val[3], val[4], val[5], val[6]
@@ -247,20 +219,18 @@ class BLEWatch:
                 print("[BLE] Always-on:", always)
 
         elif h == handles[_H_LOCAL_TIME]:
-            pass  # Accept but ignore for now
+            pass  # Accept but ignore
 
-    # ── Read handler ──────────────────────────────────────────────────────
+    # ── Read handler ──────────────────────────────────────────────────────────
 
     def _handle_read(self, h):
         handles = self._handles
         if self._shared is None:
             return
-
         if h == handles[_H_BAT_LEVEL]:
             self._ble.gatts_write(h, bytes([self._shared.get("bat_pct", 100)]))
         elif h == handles[_H_STEPS]:
-            s = self._shared.get("steps", 0)
-            self._ble.gatts_write(h, struct.pack("<I", s))
+            self._ble.gatts_write(h, struct.pack("<I", self._shared.get("steps", 0)))
         elif h == handles[_H_ALARM_TIME] and self._alarm:
             self._ble.gatts_write(
                 h, bytes([self._alarm.get_hour(), self._alarm.get_minute()])
@@ -275,7 +245,7 @@ class BLEWatch:
             always = self._shared.get("ble_always", False)
             self._ble.gatts_write(h, bytes([0x01 if always else 0x00]))
 
-    # ── Notify helpers ────────────────────────────────────────────────────
+    # ── Notify helpers ────────────────────────────────────────────────────────
 
     def notify_battery(self, pct):
         if self._conn is None:
@@ -291,60 +261,54 @@ class BLEWatch:
         self._ble.gatts_write(h, struct.pack("<I", steps))
         self._ble.gatts_notify(self._conn, h)
 
-    # ── Background thread ─────────────────────────────────────────────────
+    # ── tick() — call from main loop every ~500ms ─────────────────────────────
 
-    def _thread_fn(self):
-        """Runs on Core 0. Manages advertising timeout + periodic notifications."""
-        last_bat = time.ticks_ms()
-        last_steps = time.ticks_ms()
+    def tick(self, shared):
+        """Handle advertising timeout and periodic notifications.
+        Replaces the old _thread_fn. Call this from the main loop every 500ms.
+        """
+        if not self._active and self._conn is None:
+            return
 
-        while True:
-            time.sleep_ms(500)
+        now = time.ticks_ms()
 
-            if not self._active:
-                continue
+        # Advertising timeout: stop after BLE_TIMEOUT_MS if not connected
+        # and not in always-on mode
+        if (
+            self._conn is None
+            and not shared.get("ble_always", False)
+            and time.ticks_diff(now, self._timeout_start) >= BLE_TIMEOUT_MS
+        ):
+            self._stop_advertise()
+            print("[BLE] Timed out, stopping advertising")
+            return
 
-            now = time.ticks_ms()
+        # Periodic notifications when connected
+        if self._conn is not None:
+            if time.ticks_diff(now, self._last_bat_notify) >= 60_000:
+                self.notify_battery(shared.get("bat_pct", 100))
+                self._last_bat_notify = now
 
-            # Advertising timeout (only when not connected and not always-on)
-            if (
-                self._conn is None
-                and not self._shared.get("ble_always", False)
-                and time.ticks_diff(now, self._timeout_start) >= BLE_TIMEOUT_MS
-            ):
-                self._stop_advertise()
-                if self._mgr:
-                    self._mgr.set_ble_indicator(False)
-                print("[BLE] Timed out, stopping advertising")
-                continue
+            if time.ticks_diff(now, self._last_steps_notify) >= 10_000:
+                self.notify_steps(shared.get("steps", 0))
+                self._last_steps_notify = now
 
-            # Battery notify every 60 s
-            if self._conn is not None and time.ticks_diff(now, last_bat) >= 60_000:
-                self.notify_battery(self._shared.get("bat_pct", 100))
-                last_bat = now
-
-            # Steps notify every 10 s
-            if self._conn is not None and time.ticks_diff(now, last_steps) >= 10_000:
-                self.notify_steps(self._shared.get("steps", 0))
-                last_steps = now
-
-    # ── Public API ────────────────────────────────────────────────────────
+    # ── Public API ────────────────────────────────────────────────────────────
 
     def start(self, shared, display, alarm, mgr, settings):
+        """Register GATT services and begin advertising immediately on boot."""
         self._shared = shared
         self._display = display
         self._alarm = alarm
         self._mgr = mgr
         self._settings = settings
         self._register()
-        # Start background thread for timeout/notify management
-        # Use 8KB stack to avoid stack overflow with LVGL TaskHandler on main thread
-        _thread.stack_size(8192)
-        _thread.start_new_thread(self._thread_fn, ())
+        self._advertise()  # advertise immediately on boot
 
     def activate(self):
-        if self._active:
-            return
+        """Re-start advertising (double-tap or after timeout)."""
+        if self._conn is not None:
+            return  # already connected, nothing to do
         self._advertise()
 
     def deactivate(self):
